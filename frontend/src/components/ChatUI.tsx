@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useChat } from "../hooks";
 import { formatDate } from "../utils";
 
 export function ChatUI() {
+  const navigate = useNavigate();
   const {
     activeChat,
     history,
@@ -19,18 +21,20 @@ export function ChatUI() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!activeChat) {
-      createNewChat();
-    }
-  }, [activeChat, createNewChat]);
-
-  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeChat?.messages]);
 
   const handleSend = () => {
     if (input.trim() && !loading) {
-      sendMessage(input);
+      const hasChatsWithMessages = history.chats.some(c => c.messages.length > 0);
+      
+      if (!activeChat && !hasChatsWithMessages) {
+        createNewChat().then(() => {
+          sendMessage(input);
+        });
+      } else {
+        sendMessage(input);
+      }
       setInput("");
     }
   };
@@ -58,6 +62,11 @@ export function ChatUI() {
           </svg>
         </button>
         <h1 className="navbar-title">Chat</h1>
+        <button className="new-chat-btn" onClick={createNewChat} disabled={loading} aria-label="New chat">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
       </div>
 
       <div
@@ -77,8 +86,19 @@ export function ChatUI() {
             + New
           </button>
         </div>
+        <div className="sidebar-actions">
+          <button className="settings-btn" onClick={() => navigate("/settings")}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            Settings
+          </button>
+        </div>
         <div className="chat-list">
-          {history.chats.map((chat) => (
+          {history.chats
+            .filter((chat) => chat.messages.length > 0)
+            .map((chat) => (
             <div
               key={chat.id}
               className={`chat-item ${activeChat?.id === chat.id ? "active" : ""}`}
@@ -112,12 +132,18 @@ export function ChatUI() {
 
       <div className="chat-main">
         <div className="chat-messages">
-          {activeChat?.messages.map((msg, i) => (
-            <div key={i} className={`message message-${msg.role}`}>
-              <div className="message-role">{msg.role}</div>
-              <div className="message-content">{msg.content}</div>
+          {(!activeChat || activeChat.messages.length === 0) ? (
+            <div className="empty-chat">
+              <p>Start a conversation by typing below.</p>
             </div>
-          ))}
+          ) : (
+            activeChat.messages.map((msg, i) => (
+              <div key={i} className={`message message-${msg.role}`}>
+                <div className="message-role">{msg.role}</div>
+                <div className="message-content">{msg.content}</div>
+              </div>
+            ))
+          )}
           {loading && (
             <div className="message message-assistant">
               <div className="typing-indicator">Thinking</div>

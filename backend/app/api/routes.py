@@ -17,7 +17,7 @@ from ..domain.schemas import (
     LLMProviderConfigSchema,
     MessageSchema,
 )
-from ..services import chat_storage, llm_service
+from ..services import chat_storage, config_storage, llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -105,20 +105,23 @@ async def clear_chat_history() -> None:
 
 @router.get("/config", response_model=LLMConfigSchema)
 async def get_config() -> LLMConfigSchema:
-    active = llm_service.get_active_provider() or "mock"
-    providers = {
-        name: LLMProviderConfigSchema(
+    saved_config = config_storage.load()
+    active = saved_config.get("active_provider", "openai")
+
+    providers = {}
+    for name in llm_service.list_providers():
+        provider = llm_service.get_provider(name)
+        saved_provider = saved_config.get("providers", {}).get(name, {})
+        providers[name] = LLMProviderConfigSchema(
             provider=name,
-            model=llm_service.get_provider(name).get_model_name()
-            if llm_service.get_provider(name)
-            else "",
+            model=provider.get_model_name() if provider else "",
             api_key="***",
-            base_url=None,
-            temperature=0.7,
-            max_tokens=None,
+            base_url=saved_provider.get("base_url"),
+            temperature=saved_provider.get("temperature", 0.7),
+            max_tokens=saved_provider.get("max_tokens"),
+            system_prompt=saved_provider.get("system_prompt"),
         )
-        for name in llm_service.list_providers()
-    }
+
     return LLMConfigSchema(
         providers=providers,
         active_provider=active,
@@ -135,9 +138,23 @@ async def update_config(config: ConfigUpdateSchema) -> LLMConfigSchema:
             base_url=config.base_url,
             temperature=config.temperature or 0.7,
             max_tokens=config.max_tokens,
+            system_prompt=config.system_prompt,
         )
         llm_service.register_provider(config.provider, provider_config)
         llm_service.set_active_provider(config.provider)
+
+        config_storage.set_provider_config(
+            config.provider,
+            {
+                "model": config.model or "gpt-3.5-turbo",
+                "api_key": config.api_key or "",
+                "base_url": config.base_url,
+                "temperature": config.temperature or 0.7,
+                "max_tokens": config.max_tokens,
+                "system_prompt": config.system_prompt,
+            },
+        )
+        config_storage.set_active_provider(config.provider)
 
         return await get_config()
 

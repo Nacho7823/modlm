@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Chat, History } from "../types";
 import * as api from "../utils/api";
 
@@ -26,6 +26,33 @@ export function useChat(): UseChatReturn {
     error: null,
   });
 
+  const loadHistory = useCallback(async () => {
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+    try {
+      const history = await api.getHistory();
+      
+      const nonEmptyChats = history.chats.filter(chat => chat.messages.length > 0);
+      const hasChanges = nonEmptyChats.length !== history.chats.length;
+      
+      if (hasChanges) {
+        history.chats = nonEmptyChats;
+      }
+      
+      const activeChat = history.active_chat_id
+        ? nonEmptyChats.find(c => c.id === history.active_chat_id) || nonEmptyChats[0] || null
+        : nonEmptyChats[0] || null;
+      
+      setState({ activeChat, history, loading: false, error: null });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? "Failed to load history" : "Unknown error";
+      setState((prev) => ({ ...prev, loading: false, error: errorMessage }));
+    }
+  }, []);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
   const sendMessage = useCallback(async (message: string) => {
     setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
@@ -41,44 +68,30 @@ export function useChat(): UseChatReturn {
         loading: false,
       }));
 
-      await api.getHistory().then((history) => {
-        setState((prev) => ({ ...prev, history }));
-      });
+      await loadHistory();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to send message";
       setState((prev) => ({ ...prev, loading: false, error: errorMessage }));
     }
-  }, [state.activeChat?.id]);
-
-  const loadHistory = useCallback(async () => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
-    try {
-      const history = await api.getHistory();
-      const activeChat = history.active_chat_id
-        ? await api.getChat(history.active_chat_id)
-        : null;
-      setState({ activeChat, history, loading: false, error: null });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to load history";
-      setState((prev) => ({ ...prev, loading: false, error: errorMessage }));
-    }
-  }, []);
+  }, [state.activeChat?.id, loadHistory]);
 
   const createNewChat = useCallback(async () => {
     setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
       const chat = await api.createChat();
+      const history = await api.getHistory();
+      const activeChat = history.chats.find(c => c.id === chat.id) || chat;
       setState((prev) => ({
         ...prev,
-        activeChat: chat,
+        activeChat,
+        history,
         loading: false,
       }));
-      await loadHistory();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to create chat";
+      const errorMessage = error instanceof Error ? "Failed to create chat" : "Unknown error";
       setState((prev) => ({ ...prev, loading: false, error: errorMessage }));
     }
-  }, [loadHistory]);
+  }, []);
 
   const deleteChat = useCallback(async (chatId: string) => {
     setState((prev) => ({ ...prev, loading: true, error: null }));

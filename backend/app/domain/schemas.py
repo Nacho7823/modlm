@@ -65,6 +65,7 @@ class LLMProviderConfigSchema(BaseModel):
     base_url: Optional[str] = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
+    system_prompt: Optional[str] = Field(default=None)
 
     class Config:
         from_attributes = True
@@ -102,6 +103,7 @@ class ConfigUpdateSchema(BaseModel):
     base_url: Optional[str] = None
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
+    system_prompt: Optional[str] = None
 
     class Config:
         from_attributes = True

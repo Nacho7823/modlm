@@ -1,10 +1,16 @@
-import { ChatUI } from "./components";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { ChatUI, Settings } from "./components";
 
 function App() {
   return (
-    <div className="app">
-      <ChatUI />
-    </div>
+    <BrowserRouter>
+      <div className="app">
+        <Routes>
+          <Route path="/" element={<ChatUI />} />
+          <Route path="/settings" element={<Settings />} />
+        </Routes>
+      </div>
+    </BrowserRouter>
   );
 }
 

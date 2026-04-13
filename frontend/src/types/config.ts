@@ -5,6 +5,7 @@ export interface LLMProviderConfig {
   base_url: string | null;
   temperature: number;
   max_tokens: number | null;
+  system_prompt: string | null;
 }
 
 export interface LLMConfig {

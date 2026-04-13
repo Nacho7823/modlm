@@ -75,9 +75,15 @@ class OpenAIProvider(LLMProviderProtocol):
 
     def generate(self, messages: Sequence[dict[str, str]], **kwargs: Any) -> str:
         try:
+            all_messages = list(messages)
+            if self._config.system_prompt:
+                all_messages.insert(
+                    0, {"role": "system", "content": self._config.system_prompt}
+                )
+
             response = self._client.chat.completions.create(
                 model=self._config.model,
-                messages=list(messages),
+                messages=all_messages,
                 temperature=self._config.temperature,
                 max_tokens=self._config.max_tokens,
             )
