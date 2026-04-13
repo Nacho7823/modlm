@@ -112,10 +112,11 @@ async def get_config() -> LLMConfigSchema:
     for name in llm_service.list_providers():
         provider = llm_service.get_provider(name)
         saved_provider = saved_config.get("providers", {}).get(name, {})
+        api_key = saved_provider.get("api_key", "")
         providers[name] = LLMProviderConfigSchema(
             provider=name,
             model=provider.get_model_name() if provider else "",
-            api_key="***",
+            api_key=api_key if api_key else "",
             base_url=saved_provider.get("base_url"),
             temperature=saved_provider.get("temperature", 0.7),
             max_tokens=saved_provider.get("max_tokens"),
