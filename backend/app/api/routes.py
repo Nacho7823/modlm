@@ -170,3 +170,16 @@ async def update_config(config: ConfigUpdateSchema) -> LLMConfigSchema:
 @router.post("/chat/new", response_model=ChatSchema)
 async def create_new_chat(title: str | None = None) -> ChatSchema:
     return chat_storage.create_chat(title)
+
+
+@router.get("/config/models")
+async def get_available_models(provider: str = "openai") -> list[str]:
+    try:
+        models = llm_service.fetch_available_models(provider)
+        return models
+    except Exception as e:
+        logger.error(f"Error fetching models: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch models: {str(e)}",
+        )

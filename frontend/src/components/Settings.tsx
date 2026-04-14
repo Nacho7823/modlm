@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme } from "../hooks";
-import { getConfig, updateConfig } from "../utils/api";
+import { getConfig, updateConfig, fetchModels } from "../utils/api";
 
 interface FormData {
   provider: string;
@@ -16,12 +16,18 @@ interface FormData {
 export function Settings() {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
+  const dropdownRef = useRef<HTMLDivElement>(null);
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
+  
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
   
   const [formData, setFormData] = useState<FormData>({
     provider: "openai",
@@ -35,6 +41,16 @@ export function Settings() {
 
   useEffect(() => {
     loadConfig();
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowModelDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   const loadConfig = async () => {
@@ -84,8 +100,36 @@ export function Settings() {
     }
   };
 
+  const handleFetchModels = async () => {
+    setFetchingModels(true);
+    setFetchError(null);
+    setAvailableModels([]);
+
+    try {
+      const models = await fetchModels(formData.provider);
+      setAvailableModels(models);
+      setShowModelDropdown(true);
+      if (models.length === 0) {
+        setFetchError("No models found or provider not available");
+      }
+    } catch (err) {
+      setFetchError("Failed to fetch models. Make sure the server is running.");
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
   const handleChange = (field: keyof FormData, value: string | number) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const selectModel = (model: string) => {
+    if (model === "__custom__") {
+      setFormData((prev) => ({ ...prev, model: "" }));
+    } else {
+      setFormData((prev) => ({ ...prev, model }));
+    }
+    setShowModelDropdown(false);
   };
 
   if (loading) {
@@ -174,14 +218,46 @@ export function Settings() {
 
           <div className="form-group">
             <label htmlFor="model">Model</label>
-            <input
-              id="model"
-              type="text"
-              value={formData.model}
-              onChange={(e) => handleChange("model", e.target.value)}
-              className="form-input"
-              placeholder="gpt-4o, gpt-3.5-turbo, llama2, etc."
-            />
+            <div className="model-select-container" ref={dropdownRef}>
+              <div className="model-input-row">
+                <input
+                  id="model"
+                  type="text"
+                  value={formData.model}
+                  onChange={(e) => handleChange("model", e.target.value)}
+                  className="form-input"
+                  placeholder="gpt-4o, gpt-3.5-turbo, llama2, etc."
+                />
+                <button
+                  type="button"
+                  className="fetch-models-btn"
+                  onClick={handleFetchModels}
+                  disabled={fetchingModels}
+                >
+                  {fetchingModels ? "..." : "Fetch"}
+                </button>
+              </div>
+              {showModelDropdown && availableModels.length > 0 && (
+                <div className="model-dropdown">
+                  {availableModels.map((model) => (
+                    <div
+                      key={model}
+                      className={`model-option ${formData.model === model ? "selected" : ""}`}
+                      onClick={() => selectModel(model)}
+                    >
+                      {model}
+                    </div>
+                  ))}
+                  <div
+                    className={`model-option custom-option ${!availableModels.includes(formData.model) && formData.model ? "selected" : ""}`}
+                    onClick={() => selectModel("__custom__")}
+                  >
+                    Custom: {formData.model || "(enter custom model)"}
+                  </div>
+                </div>
+              )}
+              {fetchError && <div className="fetch-error">{fetchError}</div>}
+            </div>
           </div>
 
           <div className="form-group">

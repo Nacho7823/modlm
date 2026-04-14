@@ -105,3 +105,13 @@ export async function updateConfig(
 
   return response.json();
 }
+
+export async function fetchModels(provider: string): Promise<string[]> {
+  const response = await fetch(`${API_BASE}/config/models?provider=${provider}`);
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch models");
+  }
+
+  return response.json();
+}

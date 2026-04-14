@@ -79,15 +79,13 @@ body {
 
 .app {
   min-height: 100dvh;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  overflow: hidden;
 }
 
 .chat-container {
   display: flex;
-  min-height: 100dvh;
+  height: 100dvh;
   background: var(--color-background);
-  flex-direction: column;
 }
 
 .navbar {
@@ -202,6 +200,7 @@ body {
 
 .chat-sidebar {
   width: 300px;
+  height: 100%;
   background: var(--color-surface);
   border-right: 1px solid var(--color-border);
   display: flex;
@@ -1034,4 +1033,93 @@ body {
   .form-row {
     grid-template-columns: 1fr;
   }
+}
+
+.model-select-container {
+  position: relative;
+}
+
+.model-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.model-input-row .form-input {
+  flex: 1;
+}
+
+.fetch-models-btn {
+  padding: 12px 16px;
+  background: var(--color-secondary);
+  color: var(--color-foreground);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.fetch-models-btn:hover:not(:disabled) {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+.fetch-models-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  max-height: 250px;
+  overflow-y: auto;
+  z-index: 20;
+  margin-top: 4px;
+}
+
+.model-option {
+  padding: 12px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--color-foreground);
+  transition: background var(--transition-fast);
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.model-option:last-child {
+  border-bottom: none;
+}
+
+.model-option:hover {
+  background: var(--color-background);
+}
+
+.model-option.selected {
+  background: var(--color-user-bg);
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.model-option.custom-option {
+  font-style: italic;
+  color: var(--color-foreground-muted);
+}
+
+.fetch-error {
+  padding: 8px 12px;
+  background: #FDF2F0;
+  color: var(--color-destructive);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-top: 8px;
 }

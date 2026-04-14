@@ -64,14 +64,55 @@ class LLMService:
             )
         return provider.generate(messages, **kwargs)
 
+    def fetch_available_models(self, provider_name: str | None = None) -> list[str]:
+        target = provider_name or self._active_provider
+        if not target:
+            return []
+        provider = self._providers.get(target)
+        if not provider:
+            return []
+
+        if hasattr(provider, "fetch_models"):
+            return provider.fetch_models()
+        return []
+
 
 class OpenAIProvider(LLMProviderProtocol):
     def __init__(self, config: LLMProviderConfigSchema):
         self._config = config
         self._client = LocalOpenAI(
-            api_key=config.api_key or None,
+            api_key=config.api_key or "dummy-key-for-listing"
+            if not config.api_key
+            else config.api_key,
             base_url=config.base_url or None,
         )
+
+    def fetch_models(self) -> list[str]:
+        try:
+            headers = {}
+            if self._config.api_key:
+                headers["Authorization"] = f"Bearer {self._config.api_key}"
+
+            base = self._config.base_url or "https://api.openai.com/v1"
+
+            if "ollama" in base.lower():
+                resp = self._client._client.get(f"{base}/api/tags")
+                if resp.is_success:
+                    data = resp.json()
+                    return [m["name"] for m in data.get("models", [])]
+            elif "lm studio" in base.lower() or "lmstudio" in base.lower():
+                resp = self._client._client.get(f"{base}/v1/models")
+                if resp.is_success:
+                    data = resp.json()
+                    return [m["id"] for m in data.get("data", [])]
+            else:
+                resp = self._client._client.get(f"{base}/models", headers=headers)
+                if resp.is_success:
+                    data = resp.json()
+                    return [m["id"] for m in data.get("data", [])]
+        except Exception as e:
+            logger.warning(f"Failed to fetch models: {e}")
+        return []
 
     def generate(self, messages: Sequence[dict[str, str]], **kwargs: Any) -> str:
         try:
