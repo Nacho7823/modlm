@@ -1,21 +1,29 @@
 """Configuration management for llmapp."""
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
 
+def _get_default_config() -> dict[str, Any]:
+    """Load default config from environment variables."""
+    env_path = Path(__file__).parent / ".env"
+    load_dotenv(env_path)
+    return {
+        "api_url": os.getenv("LLM_API_URL", "http://127.0.0.1:1234/v1"),
+        "api_key": os.getenv("LLM_API_KEY", ""),
+        "model": os.getenv("LLM_MODEL", "qwen3.5-4b"),
+        "mcp_servers": {},
+    }
+
+
 class ConfigManager:
     """Manages application configuration from file and environment."""
 
-    DEFAULT_CONFIG = {
-        "api_url": "http://127.0.0.1:1234/v1",
-        "api_key": "",
-        "model": "granite-4.0-h-micro",
-        "mcp_servers": {},
-    }
+    DEFAULT_CONFIG = _get_default_config()
 
     def __init__(self, config_dir: Path | None = None) -> None:
         if config_dir is None:

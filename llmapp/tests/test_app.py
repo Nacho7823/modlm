@@ -14,7 +14,7 @@ class TestConfigManager:
         manager = ConfigManager(tmp_path)
         config = manager.load()
         assert config["api_url"] == "http://127.0.0.1:1234/v1"
-        assert config["model"] == "granite-4.0-h-micro"
+        assert config["model"] == "qwen3.5-4b"
         assert config["mcp_servers"] == {}
 
     def test_save_and_load(self, tmp_path):
@@ -34,7 +34,7 @@ class TestConfigManager:
         manager.load()
         url, key, model = manager.get_api_config()
         assert url == "http://127.0.0.1:1234/v1"
-        assert model == "granite-4.0-h-micro"
+        assert model == "qwen3.5-4b"
 
     def test_add_mcp_server(self, tmp_path):
         manager = ConfigManager(tmp_path)
@@ -222,7 +222,7 @@ class TestChatAppIntegration:
         app.config_manager.load()
         api_url, api_key, model = app.config_manager.get_api_config()
         assert api_url == "http://127.0.0.1:1234/v1"
-        assert model == "granite-4.0-h-micro"
+        assert model == "qwen3.5-4b"
 
     def test_command_handler_mcp_list(self, tmp_path):
         from llmapp.app import ChatApp

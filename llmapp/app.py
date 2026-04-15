@@ -112,6 +112,7 @@ class ChatApp(App):
     BINDINGS = [
         ("ctrl+c", "quit", "Quit"),
         ("ctrl+q", "quit", "Quit"),
+        ("escape", "cancel_stream", "Cancel"),
     ]
 
     def __init__(self) -> None:
@@ -125,6 +126,8 @@ class ChatApp(App):
         self.mcp_clients: dict[str, HTTPMCPClient] = {}
         self.command_handler = self._create_command_handler()
         self._quit_requested = False
+        self._streaming_task: asyncio.Task | None = None
+        self._streaming_active = False
 
     def _create_command_handler(self) -> CommandHandler:
         return CommandHandler(
@@ -200,13 +203,26 @@ class ChatApp(App):
         container = self.query_one("#chat-container", ChatContainer)
         container.add_message("assistant", "")
 
+        self._streaming_active = True
+
+        async def stream_task():
+            try:
+                async for chunk in self._call_llm_stream(text):
+                    if chunk:
+                        self.messages[streaming_msg_idx]["content"] += chunk
+                        self._update_streaming_response(chunk)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._update_streaming_response(f"\nError: {e}")
+            finally:
+                self._streaming_active = False
+
+        self._streaming_task = asyncio.create_task(stream_task())
         try:
-            async for chunk in self._call_llm_stream(text):
-                if chunk:
-                    self.messages[streaming_msg_idx]["content"] += chunk
-                    self._update_streaming_response(chunk)
-        except Exception as e:
-            self._update_streaming_response(f"\nError: {e}")
+            await self._streaming_task
+        except asyncio.CancelledError:
+            pass
 
     async def _call_llm(self, prompt: str) -> str:
         if not self.client:
@@ -329,3 +345,14 @@ class ChatApp(App):
         elif self.messages:
             self.history_manager.save("default", self.messages)
         self._quit_requested = True
+
+    def _set_streaming_inactive(self) -> None:
+        self._streaming_active = False
+
+    def action_cancel_stream(self) -> None:
+        if self._streaming_task and not self._streaming_task.done():
+            self._streaming_task.cancel()
+            self._streaming_active = False
+            self._add_system_message("Generation cancelled.")
+        elif self._streaming_active:
+            self._streaming_active = False

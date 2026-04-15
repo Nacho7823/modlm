@@ -346,6 +346,7 @@ def _parse_choices(choices_data: list[dict[str, Any]]) -> list[Choice]:
         message = Message(
             content=message_data.get("content", ""),
             role=message_data.get("role", "assistant"),
+            reasoning_content=message_data.get("reasoning_content"),
         )
 
         tool_calls = choice_data.get("tool_calls", [])

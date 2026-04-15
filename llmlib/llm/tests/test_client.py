@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import pytest
 import httpx
 
@@ -14,9 +15,9 @@ class TestOpenAIConnection:
         assert client.base_url == "https://api.openai.com/v1"
         client.close()
 
-    def test_init_custom_base_url(self):
-        client = OpenAI(base_url="http://localhost:11434/v1")
-        assert client.base_url == "http://localhost:11434/v1"
+    def test_init_custom_base_url(self, default_api_url):
+        client = OpenAI(base_url=default_api_url)
+        assert client.base_url == default_api_url
         client.close()
 
     def test_init_with_api_key(self):
@@ -34,33 +35,33 @@ class TestOpenAIConnection:
         client.close()
         assert client._client is not None
 
-    def test_context_manager(self):
-        with OpenAI(base_url="http://localhost:11434/v1") as client:
+    def test_context_manager(self, default_api_url):
+        with OpenAI(base_url=default_api_url) as client:
             assert client is not None
         assert client._client is None
 
-    def test_chat_property(self):
-        client = OpenAI(base_url="http://localhost:11434/v1")
+    def test_chat_property(self, default_api_url):
+        client = OpenAI(base_url=default_api_url)
         chat = client.chat
         assert isinstance(chat, Chat)
         client.close()
 
-    def test_client_type(self):
-        client = OpenAI(base_url="http://localhost:11434/v1")
+    def test_client_type(self, default_api_url):
+        client = OpenAI(base_url=default_api_url)
         assert isinstance(client._client, httpx.Client)
         client.close()
 
 
 class TestChatEndpoint:
-    def test_completions_property(self):
-        client = OpenAI(base_url="http://localhost:11434/v1")
+    def test_completions_property(self, default_api_url):
+        client = OpenAI(base_url=default_api_url)
         chat = client.chat
         completions = chat.completions
         assert isinstance(completions, Completions)
         client.close()
 
-    def test_chat_passes_model_to_completions(self):
-        client = OpenAI(base_url="http://localhost:11434/v1", model="test-model")
+    def test_chat_passes_model_to_completions(self, default_api_url):
+        client = OpenAI(base_url=default_api_url, model="test-model")
         completions = client.chat.completions
         assert completions._model == "test-model"
         client.close()
@@ -68,14 +69,6 @@ class TestChatEndpoint:
 
 class TestCompletionsModel:
     """Tests for model parameter handling."""
-
-    @pytest.fixture(autouse=True)
-    def check_api(self, request):
-        from llmlib.llm.tests.conftest import is_api_available
-
-        if not is_api_available():
-            pytest.skip("API not available")
-        yield
 
     def test_model_from_constructor(self, real_client):
         completions = real_client.chat.completions
@@ -109,16 +102,8 @@ class TestCompletionsModel:
         real_client.close()
 
 
-class TestCompletionsReal:
+class TestCompletionsAPI:
     """Real API tests for completions."""
-
-    @pytest.fixture(autouse=True)
-    def check_api(self, request):
-        from llmlib.llm.tests.conftest import is_api_available
-
-        if not is_api_available():
-            pytest.skip("API not available")
-        yield
 
     def test_create_basic(self, real_client, model):
         result = real_client.chat.completions.create(
@@ -126,7 +111,7 @@ class TestCompletionsReal:
             messages=[{"role": "user", "content": "Say 'hello' and nothing else."}],
             max_tokens=20,
         )
-        assert result.choices[0].message.content
+        assert result.choices[0].message.effective_content
         assert result.model == model
 
     def test_create_with_temperature(self, real_client, model):
@@ -136,7 +121,7 @@ class TestCompletionsReal:
             temperature=0.0,
             max_tokens=10,
         )
-        assert result.choices[0].message.content
+        assert result.choices[0].message.effective_content
 
     def test_create_with_max_tokens(self, real_client, model):
         result = real_client.chat.completions.create(
@@ -144,7 +129,7 @@ class TestCompletionsReal:
             messages=[{"role": "user", "content": "Count from 1 to 10."}],
             max_tokens=5,
         )
-        assert result.choices[0].message.content
+        assert result.choices[0].message.effective_content
 
     def test_create_with_tools(self, real_client, model):
         tools = [
@@ -204,16 +189,8 @@ class TestCompletionsReal:
         assert result.model == model
 
 
-class TestConversationReal:
+class TestConversationAPI:
     """Real API tests for conversations."""
-
-    @pytest.fixture(autouse=True)
-    def check_api(self, request):
-        from llmlib.llm.tests.conftest import is_api_available
-
-        if not is_api_available():
-            pytest.skip("API not available")
-        yield
 
     def test_single_message(self, real_client, model):
         result = real_client.chat.completions.create(
@@ -221,7 +198,7 @@ class TestConversationReal:
             messages=[{"role": "user", "content": "Say 'ok'."}],
             max_tokens=10,
         )
-        assert result.choices[0].message.content
+        assert result.choices[0].message.effective_content
 
     def test_multiple_messages(self, real_client, model):
         messages = [
@@ -235,7 +212,7 @@ class TestConversationReal:
             messages=messages,
             max_tokens=20,
         )
-        assert result.choices[0].message.content
+        assert result.choices[0].message.effective_content
 
     def test_system_message_first(self, real_client, model):
         messages = [
@@ -247,7 +224,7 @@ class TestConversationReal:
             messages=messages,
             max_tokens=20,
         )
-        assert result.choices[0].message.content
+        assert result.choices[0].message.effective_content
 
     def test_user_and_assistant_roles(self, real_client, model):
         messages = [
@@ -260,7 +237,7 @@ class TestConversationReal:
             messages=messages,
             max_tokens=20,
         )
-        assert result.choices[0].message.content
+        assert result.choices[0].message.effective_content
 
     def test_message_content_preserved(self, real_client, model):
         messages = [
@@ -271,7 +248,7 @@ class TestConversationReal:
             messages=messages,
             max_tokens=20,
         )
-        assert result.choices[0].message.content
+        assert result.choices[0].message.effective_content
 
     def test_system_prompt_via_kwargs(self, real_client, model):
         result = real_client.chat.completions.create(
@@ -280,28 +257,20 @@ class TestConversationReal:
             max_tokens=20,
             system_prompt="You are a helpful assistant.",
         )
-        assert result.choices[0].message.content
+        assert result.choices[0].message.effective_content
 
 
 class TestFetchModels:
     """Tests for fetch_models method."""
 
-    @pytest.fixture(autouse=True)
-    def check_api(self, request):
-        from llmlib.llm.tests.conftest import is_api_available
-
-        if not is_api_available():
-            pytest.skip("API not available")
-        yield
-
-    def test_fetch_models_ollama(self):
-        client = OpenAI(base_url="http://localhost:11434/v1")
+    def test_fetch_models_ollama(self, default_api_url):
+        client = OpenAI(base_url=default_api_url)
         models = client.fetch_models()
         client.close()
         assert isinstance(models, list)
 
-    def test_fetch_models_returns_strings(self):
-        client = OpenAI(base_url="http://localhost:11434/v1")
+    def test_fetch_models_returns_strings(self, default_api_url):
+        client = OpenAI(base_url=default_api_url)
         models = client.fetch_models()
         client.close()
         for m in models:
@@ -313,8 +282,8 @@ class TestFetchModels:
         client.close()
         assert len(models) > 0
 
-    def test_fetch_models_with_api_key(self):
-        client = OpenAI(base_url="http://localhost:11434/v1", api_key="test-key")
+    def test_fetch_models_with_api_key(self, default_api_url):
+        client = OpenAI(base_url=default_api_url, api_key="test-key")
         models = client.fetch_models()
         client.close()
 
@@ -340,11 +309,7 @@ class TestStreamCompletions:
             max_tokens=10,
         )
         chunks = list(result)
-        has_content = any(
-            chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-            for chunk in chunks
-        )
-        assert has_content
+        assert_stream_has_content(chunks)
         real_client.close()
 
 
@@ -353,8 +318,6 @@ class TestAsyncCompletions:
         assert hasattr(real_client, "chat_async")
 
     def test_async_completions_create(self, real_client):
-        import asyncio
-
         async def run():
             result = await real_client.chat_async.completions.create(
                 model=real_client.model,
@@ -364,12 +327,10 @@ class TestAsyncCompletions:
             return result
 
         result = asyncio.run(run())
-        assert result.choices[0].message.content
+        assert result.choices[0].message.effective_content
         real_client.close()
 
     def test_async_stream_completions(self, real_client):
-        import asyncio
-
         async def run():
             chunks = []
             async for chunk in await real_client.chat_async.completions.create(
@@ -382,9 +343,22 @@ class TestAsyncCompletions:
             return chunks
 
         chunks = asyncio.run(run())
-        has_content = any(
-            chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-            for chunk in chunks
-        )
-        assert has_content
+        assert_stream_has_content(chunks)
         real_client.close()
+
+
+def assert_response_has_content(response):
+    """Helper: assert response has content in first choice."""
+    assert response.choices, "Response has no choices"
+    content = response.choices[0].message.effective_content
+    assert content, "Response message has no content"
+
+
+def assert_stream_has_content(chunks):
+    """Helper: assert streaming chunks have content."""
+    has_content = any(
+        chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+        or chunk.get("choices", [{}])[0].get("delta", {}).get("reasoning_content")
+        for chunk in chunks
+    )
+    assert has_content, "No content found in streaming chunks"

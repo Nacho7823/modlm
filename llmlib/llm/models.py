@@ -8,15 +8,27 @@ from typing import Any
 class Message:
     """Message object for chat completion."""
 
-    def __init__(self, content: str, role: str = "assistant"):
+    def __init__(
+        self,
+        content: str,
+        role: str = "assistant",
+        reasoning_content: str | None = None,
+    ):
         self.content = content
         self.role = role
+        self.reasoning_content = reasoning_content
 
     def to_dict(self) -> dict[str, str]:
         return {"role": self.role, "content": self.content}
 
     def __repr__(self) -> str:
-        return f"Message(role={self.role!r}, content={self.content!r})"
+        reason = self.reasoning_content[:20] if self.reasoning_content else ""
+        return f"Message(role={self.role!r}, content={self.content!r}, reasoning={reason!r})"
+
+    @property
+    def effective_content(self) -> str:
+        """Return content or reasoning_content if content is empty."""
+        return self.content if self.content else self.reasoning_content or ""
 
 
 class Choice:
