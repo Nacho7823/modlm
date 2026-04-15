@@ -16,15 +16,17 @@ from .history import ConversationManager
 from .command import CommandHandler
 
 
+THINKING_PLACEHOLDER = "Thinking..."
+
+
 class MessageView(Static):
     """Displays a single message in the chat."""
 
     def __init__(self, role: str, content: str, thinking: str = ""):
-        prefix = "You" if role == "user" else "Assistant"
         self.role = role
         self._content = content
         self._thinking = thinking
-        super().__init__(f"[bold]{prefix}:[/bold]\n", markup=True)
+        super().__init__(markup=True)
         self._update_display()
 
     def _update_display(self) -> None:
@@ -228,26 +230,28 @@ class ChatApp(App):
         streaming_msg_idx = len(self.messages)
         self.messages.append({"role": "assistant", "content": ""})
         container = self.query_one("#chat-container", ChatContainer)
-        container.add_message("assistant", "Thinking...")
+        container.add_message("assistant", THINKING_PLACEHOLDER)
 
         self._streaming_active = True
 
-        async def stream_task():
-            try:
-                async for content, thinking in self._call_llm_stream(text):
-                    if content:
-                        self.messages[streaming_msg_idx]["content"] += content
-                        self._update_streaming_response(content)
-                    if thinking:
-                        self._update_streaming_thinking(thinking)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                self._update_streaming_response(f"\nError: {e}")
-            finally:
-                self._streaming_active = False
+        self._streaming_task = asyncio.create_task(
+            self._stream_response(text, streaming_msg_idx)
+        )
 
-        self._streaming_task = asyncio.create_task(stream_task())
+    async def _stream_response(self, prompt: str, msg_idx: int) -> None:
+        try:
+            async for content, thinking in self._call_llm_stream(prompt):
+                if content:
+                    self.messages[msg_idx]["content"] += content
+                    self._update_streaming_response(content)
+                if thinking:
+                    self._update_streaming_thinking(thinking)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._update_streaming_response(f"\nError: {e}")
+        finally:
+            self._streaming_active = False
 
     async def _call_llm(self, prompt: str) -> str:
         if not self.client:
@@ -274,30 +278,34 @@ class ChatApp(App):
             reasoning = delta.get("reasoning_content", "")
             yield (content, reasoning)
 
-    def _add_user_message(self, content: str) -> None:
-        self.messages.append({"role": "user", "content": content})
+    def _add_message(self, role: str, content: str) -> None:
+        self.messages.append({"role": role, "content": content})
         container = self.query_one("#chat-container", ChatContainer)
-        container.add_message("user", content)
+        container.add_message(role, content)
+
+    def _add_user_message(self, content: str) -> None:
+        self._add_message("user", content)
 
     def _add_assistant_message(self, content: str) -> None:
-        self.messages.append({"role": "assistant", "content": content})
-        container = self.query_one("#chat-container", ChatContainer)
-        container.add_message("assistant", content)
+        self._add_message("assistant", content)
 
     def _add_system_message(self, content: str) -> None:
-        container = self.query_one("#chat-container", ChatContainer)
-        container.add_message("system", content)
+        self._add_message("system", content)
 
     def _remove_thinking(self) -> None:
         container = self.query_one("#chat-container", ChatContainer)
-        for child in container.children:
-            if (
-                isinstance(child, MessageView)
+        thinking_widget = next(
+            (
+                child
+                for child in container.children
+                if isinstance(child, MessageView)
                 and child.role == "assistant"
-                and child.content == "Thinking..."
-            ):
-                child.remove()
-                break
+                and child.content == THINKING_PLACEHOLDER
+            ),
+            None,
+        )
+        if thinking_widget:
+            thinking_widget.remove()
 
     def _update_streaming_response(self, new_content: str) -> None:
         container = self.query_one("#chat-container", ChatContainer)
@@ -377,14 +385,8 @@ class ChatApp(App):
         self._add_system_message("Started new conversation.")
 
     def _request_quit(self) -> None:
-        if self.messages and self.current_session:
-            self.history_manager.save(self.current_session, self.messages)
-        elif self.messages:
-            self.history_manager.save("default", self.messages)
+        self._save_current_conversation()
         self._quit_requested = True
-
-    def _set_streaming_inactive(self) -> None:
-        self._streaming_active = False
 
     def action_cancel_stream(self) -> None:
         if self._streaming_task and not self._streaming_task.done():

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+REASONING_PREVIEW_LENGTH = 20
+
 
 class Message:
     """Message object for chat completion."""
@@ -18,11 +20,18 @@ class Message:
         self.role = role
         self.reasoning_content = reasoning_content
 
-    def to_dict(self) -> dict[str, str]:
-        return {"role": self.role, "content": self.content}
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.reasoning_content:
+            result["reasoning_content"] = self.reasoning_content
+        return result
 
     def __repr__(self) -> str:
-        reason = self.reasoning_content[:20] if self.reasoning_content else ""
+        reason = (
+            self.reasoning_content[:REASONING_PREVIEW_LENGTH]
+            if self.reasoning_content
+            else ""
+        )
         return f"Message(role={self.role!r}, content={self.content!r}, reasoning={reason!r})"
 
     @property

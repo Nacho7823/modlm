@@ -23,6 +23,15 @@ class TestMessage:
         result = msg.to_dict()
         assert result == {"role": "user", "content": "Hello"}
 
+    def test_to_dict_with_reasoning(self):
+        msg = Message(content="Answer", role="assistant", reasoning_content="Reasoning")
+        result = msg.to_dict()
+        assert result == {
+            "role": "assistant",
+            "content": "Answer",
+            "reasoning_content": "Reasoning",
+        }
+
     def test_repr(self):
         msg = Message(content="Hello", role="user")
         assert "Message" in repr(msg)
