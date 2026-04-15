@@ -123,21 +123,21 @@ class TestMessageView:
     """Tests for MessageView widget."""
 
     def test_message_view_user_role(self):
-        from llmapp.app import MessageView
+        from llmapp.widgets import MessageView
 
         view = MessageView(role="user", content="Hello")
         assert view.role == "user"
         assert view.content == "Hello"
 
     def test_message_view_assistant_role(self):
-        from llmapp.app import MessageView
+        from llmapp.widgets import MessageView
 
         view = MessageView(role="assistant", content="Response")
         assert view.role == "assistant"
         assert view.content == "Response"
 
     def test_message_view_system_role(self):
-        from llmapp.app import MessageView
+        from llmapp.widgets import MessageView
 
         view = MessageView(role="system", content="System message")
         assert view.role == "system"
@@ -148,7 +148,7 @@ class TestChatContainer:
     """Tests for ChatContainer widget."""
 
     def test_chat_container_init(self):
-        from llmapp.app import ChatContainer
+        from llmapp.widgets import ChatContainer
 
         container = ChatContainer()
         assert container is not None
@@ -158,13 +158,13 @@ class TestChatInput:
     """Tests for ChatInput widget."""
 
     def test_chat_input_init(self):
-        from llmapp.app import ChatInput
+        from llmapp.widgets import ChatInput
 
         inp = ChatInput()
         assert inp is not None
 
     def test_chat_input_init_with_custom_placeholder(self):
-        from llmapp.app import ChatInput
+        from llmapp.widgets import ChatInput
 
         inp = ChatInput(placeholder="Custom placeholder")
         assert inp is not None

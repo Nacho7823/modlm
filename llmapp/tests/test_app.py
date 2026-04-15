@@ -255,7 +255,7 @@ class TestMessageView:
     """Tests for MessageView widget."""
 
     def test_message_view_user(self):
-        from llmapp.app import MessageView
+        from llmapp.widgets import MessageView
 
         msg = MessageView(role="user", content="Hello")
         assert msg.role == "user"
@@ -263,14 +263,14 @@ class TestMessageView:
         assert msg.thinking == ""
 
     def test_message_view_assistant(self):
-        from llmapp.app import MessageView
+        from llmapp.widgets import MessageView
 
         msg = MessageView(role="assistant", content="Hi there")
         assert msg.role == "assistant"
         assert msg.content == "Hi there"
 
     def test_message_view_with_thinking(self):
-        from llmapp.app import MessageView
+        from llmapp.widgets import MessageView
 
         msg = MessageView(
             role="assistant", content="Final answer", thinking="Reasoning..."
@@ -279,28 +279,28 @@ class TestMessageView:
         assert msg.thinking == "Reasoning..."
 
     def test_message_view_append_content(self):
-        from llmapp.app import MessageView
+        from llmapp.widgets import MessageView
 
         msg = MessageView(role="assistant", content="Hello")
         msg.append_content(" World")
         assert msg.content == "Hello World"
 
     def test_message_view_append_thinking(self):
-        from llmapp.app import MessageView
+        from llmapp.widgets import MessageView
 
         msg = MessageView(role="assistant", content="", thinking="Thinking")
         msg.append_thinking(" more")
         assert msg.thinking == "Thinking more"
 
     def test_message_view_content_setter(self):
-        from llmapp.app import MessageView
+        from llmapp.widgets import MessageView
 
         msg = MessageView(role="assistant", content="Hello")
         msg.content = "Updated"
         assert msg.content == "Updated"
 
     def test_message_view_thinking_setter(self):
-        from llmapp.app import MessageView
+        from llmapp.widgets import MessageView
 
         msg = MessageView(role="assistant", content="", thinking="Initial")
         msg.thinking = "Updated thinking"
@@ -311,7 +311,7 @@ class TestChatContainer:
     """Tests for ChatContainer widget."""
 
     def test_chat_container_children_initially_empty(self):
-        from llmapp.app import ChatContainer
+        from llmapp.widgets import ChatContainer
 
         container = ChatContainer()
         assert len(container.children) == 0

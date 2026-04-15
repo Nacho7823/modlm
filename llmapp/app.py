@@ -1,112 +1,20 @@
 """Main TUI chat application for llmapp."""
 
 import asyncio
-from typing import Any, AsyncIterator
+from typing import Any
 
-from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.containers import Container, VerticalScroll
-from textual.widgets import Header, Footer, Static, Input, Label
+from textual.containers import Container
+from textual.widgets import Header, Footer, Input
 
 from llmlib.llm import OpenAI
-from llmlib.mcp import HTTPMCPClient
 
 from .config import ConfigManager
 from .history import ConversationManager
 from .command import CommandHandler
-
-
-THINKING_PLACEHOLDER = "Thinking..."
-
-
-class MessageView(Static):
-    """Displays a single message in the chat."""
-
-    def __init__(self, role: str, content: str, thinking: str = ""):
-        self.role = role
-        self._content = content
-        self._thinking = thinking
-        super().__init__(markup=True)
-        self._update_display()
-
-    def _update_display(self) -> None:
-        prefix = "You" if self.role == "user" else "Assistant"
-        text = f"[bold]{prefix}:[/bold]\n"
-        if self._thinking:
-            text += f"[i][dim]{self._thinking}[/dim][/i]\n"
-        if self._content:
-            text += self._content
-        self.update(text)
-
-    @property
-    def content(self) -> str:
-        return self._content
-
-    @content.setter
-    def content(self, value: str) -> None:
-        self._content = value
-        self._update_display()
-
-    @property
-    def thinking(self) -> str:
-        return self._thinking
-
-    @thinking.setter
-    def thinking(self, value: str) -> None:
-        self._thinking = value
-        self._update_display()
-
-    def append_content(self, text: str) -> None:
-        self._content += text
-        self._update_display()
-
-    def append_thinking(self, text: str) -> None:
-        self._thinking += text
-        self._update_display()
-
-
-class ChatContainer(VerticalScroll):
-    """Container for chat messages."""
-
-    def add_message(self, role: str, content: str) -> None:
-        self.mount(MessageView(role=role, content=content))
-        self.scroll_end()
-
-
-class ChatInput(Input):
-    """Input field for chat messages."""
-
-    def __init__(
-        self, placeholder: str = "Type a message or /help...", **kwargs: Any
-    ) -> None:
-        super().__init__(placeholder=placeholder, **kwargs)
-        self._app: ChatApp | None = None
-
-    def on_mount(self) -> None:
-        self._app = self.app
-
-
-class ConfigModal(Static):
-    """Modal for displaying and editing configuration."""
-
-    def __init__(self, config: ConfigManager) -> None:
-        super().__init__()
-        self.config = config
-
-    def compose(self) -> ComposeResult:
-        yield Static("[bold]Current Configuration[/bold]", markup=True)
-        yield Static(f"API URL: {self.config.get('api_url', '')}")
-        yield Static(
-            f"API Key: {self.config.get('api_key', '')[:10]}..."
-            if self.config.get("api_key")
-            else "API Key: (not set)"
-        )
-        yield Static(f"Model: {self.config.get('model', '')}")
-        mcp = self.config.get_mcp_servers()
-        if mcp:
-            yield Static("MCP Servers:")
-            for name, url in mcp.items():
-                yield Static(f"  - {name}: {url}")
+from .widgets import ChatContainer, ChatInput
+from .streaming import StreamResponder
+from .services import ConfigService, HistoryService, MCPService
 
 
 class ChatApp(App):
@@ -152,24 +60,32 @@ class ChatApp(App):
         self.current_session: str | None = None
         self.client: OpenAI | None = None
         self.client_async: OpenAI | None = None
-        self.mcp_clients: dict[str, HTTPMCPClient] = {}
+        self.mcp_clients: dict[str, Any] = {}
         self.command_handler = self._create_command_handler()
-        self._quit_requested = False
+        self.services = self._create_services()
         self._streaming_task: asyncio.Task | None = None
         self._streaming_active = False
+        self._quit_requested = False
 
     def _create_command_handler(self) -> CommandHandler:
         return CommandHandler(
             config_handler=self._show_config,
-            mcp_add_handler=self._add_mcp_server,
-            mcp_list_handler=self._list_mcp_servers,
-            mcp_remove_handler=self._remove_mcp_server,
-            session_list_handler=self._list_sessions,
-            session_load_handler=self._load_session,
-            session_delete_handler=self._delete_session,
+            mcp_add_handler=self._mcp_add,
+            mcp_list_handler=self._mcp_list,
+            mcp_remove_handler=self._mcp_remove,
+            session_list_handler=self._sessions_list,
+            session_load_handler=self._sessions_load,
+            session_delete_handler=self._sessions_delete,
             new_handler=self._new_conversation,
             quit_handler=self._request_quit,
         )
+
+    def _create_services(self) -> dict[str, Any]:
+        return {
+            "config": ConfigService(self),
+            "history": HistoryService(self),
+            "mcp": MCPService(self),
+        }
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -185,24 +101,8 @@ class ChatApp(App):
 
     def on_mount(self) -> None:
         self.config_manager.load()
-        self._init_client()
+        self.services["config"].init_clients()
         self.query_one("#chat-input", ChatInput).focus()
-
-    def _init_client(self) -> None:
-        api_url, api_key, model = self.config_manager.get_api_config()
-        self.client = OpenAI(base_url=api_url, api_key=api_key, model=model)
-        self.client_async = OpenAI(base_url=api_url, api_key=api_key, model=model)
-        self._init_mcp_clients()
-
-    def _init_mcp_clients(self) -> None:
-        for name, url in self.config_manager.get_mcp_servers().items():
-            try:
-                client = HTTPMCPClient(base_url=url)
-                self.mcp_clients[name] = client
-            except Exception as e:
-                self._add_system_message(
-                    f"Failed to connect to MCP server '{name}': {e}"
-                )
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -227,20 +127,19 @@ class ChatApp(App):
     async def _send_message(self, text: str) -> None:
         self._add_user_message(text)
 
-        streaming_msg_idx = len(self.messages)
+        msg_idx = len(self.messages)
         self.messages.append({"role": "assistant", "content": ""})
-        container = self.query_one("#chat-container", ChatContainer)
-        container.add_message("assistant", THINKING_PLACEHOLDER)
+        container = self._get_chat_container()
+        container.add_message("assistant", "Thinking...")
 
         self._streaming_active = True
 
-        self._streaming_task = asyncio.create_task(
-            self._stream_response(text, streaming_msg_idx)
-        )
+        self._streaming_task = asyncio.create_task(self._stream_response(text, msg_idx))
 
     async def _stream_response(self, prompt: str, msg_idx: int) -> None:
         try:
-            async for content, thinking in self._call_llm_stream(prompt):
+            responder = StreamResponder(self.client_async, self.messages)
+            async for content, thinking in responder.stream(prompt):
                 if content:
                     self.messages[msg_idx]["content"] += content
                     self._update_streaming_response(content)
@@ -253,139 +152,76 @@ class ChatApp(App):
         finally:
             self._streaming_active = False
 
-    async def _call_llm(self, prompt: str) -> str:
-        if not self.client:
-            raise ValueError("LLM client not initialized")
-
-        messages = [{"role": m["role"], "content": m["content"]} for m in self.messages]
-        messages.append({"role": "user", "content": prompt})
-
-        response = self.client.chat.completions.create(messages=messages)
-        return response.choices[0].message.content or ""
-
-    async def _call_llm_stream(self, prompt: str) -> AsyncIterator[tuple[str, str]]:
-        if not self.client_async:
-            raise ValueError("LLM client not initialized")
-
-        messages = [{"role": m["role"], "content": m["content"]} for m in self.messages]
-        messages.append({"role": "user", "content": prompt})
-
-        async for chunk in await self.client_async.chat_async.completions.create(
-            messages=messages, stream=True
-        ):
-            delta = chunk.get("choices", [{}])[0].get("delta", {})
-            content = delta.get("content", "")
-            reasoning = delta.get("reasoning_content", "")
-            yield (content, reasoning)
-
     def _add_message(self, role: str, content: str) -> None:
         self.messages.append({"role": role, "content": content})
-        container = self.query_one("#chat-container", ChatContainer)
+        container = self._get_chat_container()
         container.add_message(role, content)
 
     def _add_user_message(self, content: str) -> None:
         self._add_message("user", content)
 
-    def _add_assistant_message(self, content: str) -> None:
-        self._add_message("assistant", content)
-
     def _add_system_message(self, content: str) -> None:
         self._add_message("system", content)
 
-    def _remove_thinking(self) -> None:
-        container = self.query_one("#chat-container", ChatContainer)
-        thinking_widget = next(
-            (
-                child
-                for child in container.children
-                if isinstance(child, MessageView)
-                and child.role == "assistant"
-                and child.content == THINKING_PLACEHOLDER
-            ),
-            None,
-        )
-        if thinking_widget:
-            thinking_widget.remove()
+    def _get_chat_container(self) -> ChatContainer:
+        return self.query_one("#chat-container", ChatContainer)
 
     def _update_streaming_response(self, new_content: str) -> None:
-        container = self.query_one("#chat-container", ChatContainer)
-        for child in reversed(container.children):
-            if isinstance(child, MessageView) and child.role == "assistant":
-                child.append_content(new_content)
-                break
+        container = self._get_chat_container()
+        view = container.last_assistant_view()
+        if view:
+            view.append_content(new_content)
 
     def _update_streaming_thinking(self, new_thinking: str) -> None:
-        container = self.query_one("#chat-container", ChatContainer)
-        for child in reversed(container.children):
-            if isinstance(child, MessageView) and child.role == "assistant":
-                child.append_thinking(new_thinking)
-                break
+        container = self._get_chat_container()
+        view = container.last_assistant_view()
+        if view:
+            view.append_thinking(new_thinking)
 
     def _show_config(self) -> None:
-        api_url, api_key, model = self.config_manager.get_api_config()
-        mcp_servers = self.config_manager.get_mcp_servers()
-        lines = [
-            "[bold]Current Configuration[/bold]",
-            f"API URL: {api_url}",
-            f"API Key: {'(set)' if api_key else '(not set)'}",
-            f"Model: {model}",
-        ]
-        if mcp_servers:
-            lines.append("MCP Servers:")
-            for name, url in mcp_servers.items():
-                lines.append(f"  - {name}: {url}")
-        self._add_system_message("\n".join(lines))
+        self.services["config"].show()
 
-    def _add_mcp_server(self, name: str, url: str) -> str:
-        self.config_manager.add_mcp_server(name, url)
-        try:
-            client = HTTPMCPClient(base_url=url)
-            self.mcp_clients[name] = client
-            return f"MCP server '{name}' added and connected."
-        except Exception as e:
-            return f"MCP server '{name}' added but failed to connect: {e}"
+    def _mcp_add(self, name: str, url: str) -> str:
+        return self.services["mcp"].add(name, url)
+
+    def _mcp_list(self) -> dict[str, str]:
+        return self.services["mcp"].list()
+
+    def _mcp_remove(self, name: str) -> str:
+        return self.services["mcp"].remove(name)
 
     def _list_mcp_servers(self) -> dict[str, str]:
-        return self.config_manager.get_mcp_servers()
+        return self._mcp_list()
+
+    def _add_mcp_server(self, name: str, url: str) -> str:
+        return self._mcp_add(name, url)
 
     def _remove_mcp_server(self, name: str) -> str:
-        if self.config_manager.remove_mcp_server(name):
-            if name in self.mcp_clients:
-                del self.mcp_clients[name]
-            return f"MCP server '{name}' removed."
-        return f"MCP server '{name}' not found."
+        return self._mcp_remove(name)
+
+    def _sessions_list(self) -> list[dict[str, Any]]:
+        return self.services["history"].list()
+
+    def _sessions_load(self, name: str) -> str:
+        return self.services["history"].load(name)
+
+    def _sessions_delete(self, name: str) -> str:
+        return self.services["history"].delete(name)
 
     def _list_sessions(self) -> list[dict[str, Any]]:
-        return self.history_manager.list()
+        return self._sessions_list()
 
     def _load_session(self, name: str) -> str:
-        messages = self.history_manager.load(name)
-        if messages is None:
-            return f"Conversation '{name}' not found."
-        self.messages = messages
-        self.current_session = name
-        container = self.query_one("#chat-container", ChatContainer)
-        container.remove_children()
-        for msg in messages:
-            container.add_message(msg["role"], msg["content"])
-        return f"Loaded conversation '{name}'."
+        return self._sessions_load(name)
 
     def _delete_session(self, name: str) -> str:
-        if self.history_manager.delete(name):
-            if self.current_session == name:
-                self.current_session = None
-            return f"Conversation '{name}' deleted."
-        return f"Conversation '{name}' not found."
+        return self._sessions_delete(name)
 
     def _new_conversation(self) -> None:
-        self.messages = []
-        self.current_session = None
-        container = self.query_one("#chat-container", ChatContainer)
-        container.remove_children()
-        self._add_system_message("Started new conversation.")
+        self.services["history"].start_new()
 
     def _request_quit(self) -> None:
-        self._save_current_conversation()
+        self.services["history"].save_current()
         self._quit_requested = True
 
     def action_cancel_stream(self) -> None:
