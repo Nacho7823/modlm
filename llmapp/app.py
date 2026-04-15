@@ -19,11 +19,22 @@ from .command import CommandHandler
 class MessageView(Static):
     """Displays a single message in the chat."""
 
-    def __init__(self, role: str, content: str) -> None:
+    def __init__(self, role: str, content: str, thinking: str = ""):
         prefix = "You" if role == "user" else "Assistant"
-        super().__init__(f"[bold]{prefix}:[/bold]\n{content}", markup=True)
         self.role = role
         self._content = content
+        self._thinking = thinking
+        super().__init__(f"[bold]{prefix}:[/bold]\n", markup=True)
+        self._update_display()
+
+    def _update_display(self) -> None:
+        prefix = "You" if self.role == "user" else "Assistant"
+        text = f"[bold]{prefix}:[/bold]\n"
+        if self._thinking:
+            text += f"[i][dim]{self._thinking}[/dim][/i]\n"
+        if self._content:
+            text += self._content
+        self.update(text)
 
     @property
     def content(self) -> str:
@@ -32,12 +43,24 @@ class MessageView(Static):
     @content.setter
     def content(self, value: str) -> None:
         self._content = value
+        self._update_display()
+
+    @property
+    def thinking(self) -> str:
+        return self._thinking
+
+    @thinking.setter
+    def thinking(self, value: str) -> None:
+        self._thinking = value
+        self._update_display()
 
     def append_content(self, text: str) -> None:
         self._content += text
-        prefix = "You" if self.role == "user" else "Assistant"
-        rich_text = Text.from_markup(f"[bold]{prefix}:[/bold]\n{self._content}")
-        self.update(rich_text)
+        self._update_display()
+
+    def append_thinking(self, text: str) -> None:
+        self._thinking += text
+        self._update_display()
 
 
 class ChatContainer(VerticalScroll):
@@ -55,6 +78,10 @@ class ChatInput(Input):
         self, placeholder: str = "Type a message or /help...", **kwargs: Any
     ) -> None:
         super().__init__(placeholder=placeholder, **kwargs)
+        self._app: ChatApp | None = None
+
+    def on_mount(self) -> None:
+        self._app = self.app
 
 
 class ConfigModal(Static):
@@ -201,16 +228,18 @@ class ChatApp(App):
         streaming_msg_idx = len(self.messages)
         self.messages.append({"role": "assistant", "content": ""})
         container = self.query_one("#chat-container", ChatContainer)
-        container.add_message("assistant", "")
+        container.add_message("assistant", "Thinking...")
 
         self._streaming_active = True
 
         async def stream_task():
             try:
-                async for chunk in self._call_llm_stream(text):
-                    if chunk:
-                        self.messages[streaming_msg_idx]["content"] += chunk
-                        self._update_streaming_response(chunk)
+                async for content, thinking in self._call_llm_stream(text):
+                    if content:
+                        self.messages[streaming_msg_idx]["content"] += content
+                        self._update_streaming_response(content)
+                    if thinking:
+                        self._update_streaming_thinking(thinking)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -219,10 +248,6 @@ class ChatApp(App):
                 self._streaming_active = False
 
         self._streaming_task = asyncio.create_task(stream_task())
-        try:
-            await self._streaming_task
-        except asyncio.CancelledError:
-            pass
 
     async def _call_llm(self, prompt: str) -> str:
         if not self.client:
@@ -234,7 +259,7 @@ class ChatApp(App):
         response = self.client.chat.completions.create(messages=messages)
         return response.choices[0].message.content or ""
 
-    async def _call_llm_stream(self, prompt: str) -> AsyncIterator[str]:
+    async def _call_llm_stream(self, prompt: str) -> AsyncIterator[tuple[str, str]]:
         if not self.client_async:
             raise ValueError("LLM client not initialized")
 
@@ -244,9 +269,10 @@ class ChatApp(App):
         async for chunk in await self.client_async.chat_async.completions.create(
             messages=messages, stream=True
         ):
-            content = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-            if content:
-                yield content
+            delta = chunk.get("choices", [{}])[0].get("delta", {})
+            content = delta.get("content", "")
+            reasoning = delta.get("reasoning_content", "")
+            yield (content, reasoning)
 
     def _add_user_message(self, content: str) -> None:
         self.messages.append({"role": "user", "content": content})
@@ -265,7 +291,11 @@ class ChatApp(App):
     def _remove_thinking(self) -> None:
         container = self.query_one("#chat-container", ChatContainer)
         for child in container.children:
-            if isinstance(child, MessageView) and child.content == "Thinking...":
+            if (
+                isinstance(child, MessageView)
+                and child.role == "assistant"
+                and child.content == "Thinking..."
+            ):
                 child.remove()
                 break
 
@@ -274,6 +304,13 @@ class ChatApp(App):
         for child in reversed(container.children):
             if isinstance(child, MessageView) and child.role == "assistant":
                 child.append_content(new_content)
+                break
+
+    def _update_streaming_thinking(self, new_thinking: str) -> None:
+        container = self.query_one("#chat-container", ChatContainer)
+        for child in reversed(container.children):
+            if isinstance(child, MessageView) and child.role == "assistant":
+                child.append_thinking(new_thinking)
                 break
 
     def _show_config(self) -> None:
