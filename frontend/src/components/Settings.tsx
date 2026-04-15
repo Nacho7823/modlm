@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme } from "../hooks";
 import { getConfig, updateConfig, fetchModels } from "../utils/api";
+import { MCPSettings } from "./MCPSettings";
 
 interface FormData {
   provider: string;
@@ -324,6 +325,8 @@ export function Settings() {
             {saving ? "Saving..." : "Save Configuration"}
           </button>
         </section>
+
+        <MCPSettings />
 
         <section className="settings-section">
           <h2>About</h2>

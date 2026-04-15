@@ -1007,6 +1007,33 @@ body {
   cursor: not-allowed;
 }
 
+.mcp-buttons-row {
+  display: flex;
+  gap: 12px;
+}
+
+.mcp-buttons-row .save-btn {
+  flex: 1;
+}
+
+.copy-example-btn {
+  padding: 14px 20px;
+  background: var(--color-bg-subtle);
+  color: var(--color-foreground);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.copy-example-btn:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-hover);
+}
+
 .settings-loading {
   display: flex;
   align-items: center;

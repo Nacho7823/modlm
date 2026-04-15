@@ -8,6 +8,8 @@ from ..core.exceptions import StorageException
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MCP_SERVERS: list[dict[str, Any]] = []
+
 
 class ConfigStorage:
     def __init__(self):
@@ -63,6 +65,57 @@ class ConfigStorage:
     def get_active_provider(self) -> str:
         data = self.load()
         return data.get("active_provider", "openai")
+
+    def get_mcp_servers(self) -> list[dict[str, Any]]:
+        """Get all MCP server configurations."""
+        data = self.load()
+        return data.get("mcp_servers", DEFAULT_MCP_SERVERS)
+
+    def set_mcp_servers(self, servers: list[dict[str, Any]]) -> None:
+        """Save MCP server configurations."""
+        data = self.load()
+        data["mcp_servers"] = servers
+        self.save(data)
+
+    def get_mcp_server(self, name: str) -> Optional[dict[str, Any]]:
+        """Get a specific MCP server configuration."""
+        servers = self.get_mcp_servers()
+        for server in servers:
+            if server.get("name") == name:
+                return server
+        return None
+
+    def set_mcp_server(self, name: str, config: dict[str, Any]) -> None:
+        """Add or update an MCP server configuration."""
+        servers = self.get_mcp_servers()
+        updated = False
+
+        for i, server in enumerate(servers):
+            if server.get("name") == name:
+                servers[i] = config
+                updated = True
+                break
+
+        if not updated:
+            servers.append(config)
+
+        self.set_mcp_servers(servers)
+
+    def delete_mcp_server(self, name: str) -> bool:
+        """Delete an MCP server configuration.
+
+        Returns:
+            True if server was deleted
+        """
+        servers = self.get_mcp_servers()
+        original_count = len(servers)
+        servers = [s for s in servers if s.get("name") != name]
+
+        if len(servers) < original_count:
+            self.set_mcp_servers(servers)
+            return True
+
+        return False
 
 
 config_storage = ConfigStorage()

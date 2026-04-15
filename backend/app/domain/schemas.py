@@ -1,12 +1,12 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 
 class MessageSchema(BaseModel):
     role: str = Field(..., pattern="^(user|assistant|system)$")
-    content: str = Field(..., min_length=1)
+    content: str = Field(default="")
     created_at: datetime = Field(default_factory=datetime.now)
     tool_calls: Optional[list["ToolCallSchema"]] = None
 
@@ -34,6 +34,44 @@ class ToolSchema(BaseModel):
     name: str = Field(..., min_length=1)
     description: str = Field(..., min_length=1)
     function: str = Field(..., min_length=1)
+
+    class Config:
+        from_attributes = True
+
+
+class MCPServerConfigSchema(BaseModel):
+    name: str = Field(..., min_length=1)
+    type: str = Field(..., pattern="^(local|remote)$")
+    command: Optional[list[str]] = None
+    url: Optional[str] = None
+    headers: Optional[dict[str, str]] = None
+    env: Optional[dict[str, str]] = None
+    timeout: int = Field(default=30, ge=1, le=300)
+    enabled: bool = Field(default=True)
+
+    class Config:
+        from_attributes = True
+
+
+class MCPToolSchema(BaseModel):
+    name: str
+    description: str
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        from_attributes = True
+
+
+class MCPToolResultSchema(BaseModel):
+    content: list[dict[str, Any]] = Field(default_factory=list)
+    is_error: bool = Field(default=False)
+
+    class Config:
+        from_attributes = True
+
+
+class MCPConfigSchema(BaseModel):
+    servers: list[MCPServerConfigSchema] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

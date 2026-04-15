@@ -34,9 +34,9 @@ modllm/
 
 ```bash
 cd backend
-python -m venv venv
+uv venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 Configurar `.env`:

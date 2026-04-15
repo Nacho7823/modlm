@@ -7,6 +7,7 @@ from .api import router
 from .core.config import settings
 from .domain.schemas import LLMProviderConfigSchema
 from .services import config_storage, llm_service
+from .services.mcp_manager import mcp_manager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,7 +34,12 @@ def load_saved_config() -> None:
         if active in providers:
             llm_service.set_active_provider(active)
 
-        logger.info(f"Loaded config: {len(providers)} providers, active={active}")
+        mcp_servers = saved.get("mcp_servers", [])
+        for server in mcp_servers:
+            mcp_manager.register_server(server)
+        logger.info(
+            f"Loaded config: {len(providers)} providers, {len(mcp_servers)} MCP servers, active={active}"
+        )
     except Exception as e:
         logger.warning(f"Could not load saved config: {e}")
 

@@ -1,4 +1,4 @@
-import type { Chat, History, LLMConfig } from "../types";
+import type { Chat, History, LLMConfig, MCPConfig, MCPTool, MCPToolResult } from "../types";
 
 const API_BASE = "/api";
 
@@ -111,6 +111,86 @@ export async function fetchModels(provider: string): Promise<string[]> {
 
   if (!response.ok) {
     throw new Error("Failed to fetch models");
+  }
+
+  return response.json();
+}
+
+export async function getMCPConfig(): Promise<MCPConfig> {
+  const response = await fetch(`${API_BASE}/mcp/config`);
+
+  if (!response.ok) {
+    throw new Error("Failed to get MCP config");
+  }
+
+  return response.json();
+}
+
+export async function updateMCPConfig(
+  servers: MCPConfig["servers"],
+): Promise<MCPConfig> {
+  const response = await fetch(`${API_BASE}/mcp/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(servers),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to update MCP config");
+  }
+
+  return response.json();
+}
+
+export async function listMCPTools(serverName: string): Promise<MCPTool[]> {
+  const response = await fetch(`${API_BASE}/mcp/${serverName}/tools`);
+
+  if (!response.ok) {
+    throw new Error("Failed to list MCP tools");
+  }
+
+  return response.json();
+}
+
+export async function executeMCPTool(
+  serverName: string,
+  toolName: string,
+  arguments_: Record<string, unknown> = {},
+): Promise<MCPToolResult> {
+  const response = await fetch(`${API_BASE}/mcp/${serverName}/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tool_name: toolName, arguments: arguments_ }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to execute MCP tool");
+  }
+
+  return response.json();
+}
+
+export interface TestConnectionResult {
+  status: "connected" | "error";
+  tools: string[];
+  tool_count: number;
+  error?: string;
+}
+
+export async function testMCPConnection(
+  serverName: string,
+): Promise<TestConnectionResult> {
+  const response = await fetch(`${API_BASE}/mcp/${serverName}/test`, {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    return {
+      status: "error",
+      tools: [],
+      tool_count: 0,
+      error: "Failed to test connection",
+    };
   }
 
   return response.json();

@@ -15,9 +15,14 @@ from ..domain.schemas import (
     ConfigUpdateSchema,
     LLMConfigSchema,
     LLMProviderConfigSchema,
+    MCPServerConfigSchema,
+    MCPToolSchema,
+    MCPToolResultSchema,
     MessageSchema,
 )
+
 from ..services import chat_storage, config_storage, llm_service
+from ..services.mcp_manager import mcp_manager
 
 logger = logging.getLogger(__name__)
 
@@ -183,3 +188,75 @@ async def get_available_models(provider: str = "openai") -> list[str]:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to fetch models: {str(e)}",
         )
+
+
+@router.get("/mcp/config")
+async def get_mcp_config() -> dict[str, Any]:
+    """Get all MCP server configurations."""
+    servers = config_storage.get_mcp_servers()
+    return {"servers": servers}
+
+
+@router.put("/mcp/config")
+async def update_mcp_config(servers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Update MCP server configurations."""
+    for server in servers:
+        try:
+            MCPServerConfigSchema(**server)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid MCP server config: {str(e)}",
+            )
+
+    for server in servers:
+        config_storage.set_mcp_server(server.get("name", ""), server)
+        mcp_manager.register_server(server)
+
+    return await get_mcp_config()
+
+
+@router.get("/mcp/{server_name}/tools")
+async def get_mcp_tools(server_name: str) -> list[dict[str, Any]]:
+    """List tools available on an MCP server."""
+    try:
+        if not mcp_manager.is_connected(server_name):
+            await mcp_manager.connect(server_name)
+
+        tools = await mcp_manager.list_tools(server_name)
+        return [t.to_dict() for t in tools]
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to list tools: {str(e)}",
+        )
+
+
+@router.post("/mcp/{server_name}/execute")
+async def execute_mcp_tool(
+    server_name: str,
+    tool_name: str,
+    arguments: dict[str, Any] = {},
+) -> dict[str, Any]:
+    """Execute a tool on an MCP server."""
+    try:
+        if not mcp_manager.is_connected(server_name):
+            await mcp_manager.connect(server_name)
+
+        result = await mcp_manager.call_tool(server_name, tool_name, arguments)
+        return result.to_dict()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to execute tool: {str(e)}",
+        )
+
+
+@router.post("/mcp/{server_name}/test")
+async def test_mcp_connection(server_name: str) -> dict[str, Any]:
+    """Test connection to an MCP server."""
+    try:
+        result = await mcp_manager.test_connection(server_name)
+        return result
+    except Exception as e:
+        return {"status": "error", "error": str(e), "tools": [], "tool_count": 0}
