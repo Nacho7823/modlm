@@ -346,3 +346,45 @@ class TestStreamCompletions:
         )
         assert has_content
         real_client.close()
+
+
+class TestAsyncCompletions:
+    def test_chat_async_property(self, real_client):
+        assert hasattr(real_client, "chat_async")
+
+    def test_async_completions_create(self, real_client):
+        import asyncio
+
+        async def run():
+            result = await real_client.chat_async.completions.create(
+                model=real_client.model,
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=5,
+            )
+            return result
+
+        result = asyncio.run(run())
+        assert result.choices[0].message.content
+        real_client.close()
+
+    def test_async_stream_completions(self, real_client):
+        import asyncio
+
+        async def run():
+            chunks = []
+            async for chunk in await real_client.chat_async.completions.create(
+                model=real_client.model,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=10,
+                stream=True,
+            ):
+                chunks.append(chunk)
+            return chunks
+
+        chunks = asyncio.run(run())
+        has_content = any(
+            chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+            for chunk in chunks
+        )
+        assert has_content
+        real_client.close()

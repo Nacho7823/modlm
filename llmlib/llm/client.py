@@ -284,10 +284,10 @@ class AsyncCompletions:
         self, payload: dict[str, Any]
     ) -> AsyncIterator[dict[str, Any]]:
         payload["stream"] = True
-        async with await self._client.post(
+        async with self._client.stream(
+            "POST",
             "/chat/completions",
             json=payload,
-            stream=True,
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():

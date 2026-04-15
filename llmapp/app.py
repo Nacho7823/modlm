@@ -3,6 +3,7 @@
 import asyncio
 from typing import Any, AsyncIterator
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Container, VerticalScroll
 from textual.widgets import Header, Footer, Static, Input, Label
@@ -19,13 +20,10 @@ class MessageView(Static):
     """Displays a single message in the chat."""
 
     def __init__(self, role: str, content: str) -> None:
-        super().__init__()
+        prefix = "You" if role == "user" else "Assistant"
+        super().__init__(f"[bold]{prefix}:[/bold]\n{content}", markup=True)
         self.role = role
         self._content = content
-
-    def compose(self) -> ComposeResult:
-        prefix = "You" if self.role == "user" else "Assistant"
-        yield Label(f"[bold]{prefix}:[/bold] {self._content}", markup=True)
 
     @property
     def content(self) -> str:
@@ -38,7 +36,8 @@ class MessageView(Static):
     def append_content(self, text: str) -> None:
         self._content += text
         prefix = "You" if self.role == "user" else "Assistant"
-        self.update(f"[bold]{prefix}:[/bold] {self._content}")
+        rich_text = Text.from_markup(f"[bold]{prefix}:[/bold]\n{self._content}")
+        self.update(rich_text)
 
 
 class ChatContainer(VerticalScroll):
@@ -105,6 +104,7 @@ class ChatApp(App):
         width: 100%;
     }
     MessageView {
+        width: 100%;
         margin-bottom: 1;
     }
     """
@@ -121,6 +121,7 @@ class ChatApp(App):
         self.messages: list[dict[str, Any]] = []
         self.current_session: str | None = None
         self.client: OpenAI | None = None
+        self.client_async: OpenAI | None = None
         self.mcp_clients: dict[str, HTTPMCPClient] = {}
         self.command_handler = self._create_command_handler()
         self._quit_requested = False
@@ -158,6 +159,7 @@ class ChatApp(App):
     def _init_client(self) -> None:
         api_url, api_key, model = self.config_manager.get_api_config()
         self.client = OpenAI(base_url=api_url, api_key=api_key, model=model)
+        self.client_async = OpenAI(base_url=api_url, api_key=api_key, model=model)
         self._init_mcp_clients()
 
     def _init_mcp_clients(self) -> None:
@@ -217,13 +219,15 @@ class ChatApp(App):
         return response.choices[0].message.content or ""
 
     async def _call_llm_stream(self, prompt: str) -> AsyncIterator[str]:
-        if not self.client:
+        if not self.client_async:
             raise ValueError("LLM client not initialized")
 
         messages = [{"role": m["role"], "content": m["content"]} for m in self.messages]
         messages.append({"role": "user", "content": prompt})
 
-        for chunk in self.client.chat.stream_completions.create(messages=messages):
+        async for chunk in await self.client_async.chat_async.completions.create(
+            messages=messages, stream=True
+        ):
             content = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
             if content:
                 yield content
