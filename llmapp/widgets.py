@@ -59,10 +59,13 @@ class MessageView(Static):
     def append_content(self, text: str) -> None:
         self._content += text
         self._update_display()
+        self.refresh()
 
     def append_thinking(self, text: str) -> None:
         self._thinking += text
         self._update_display()
+        self.refresh()
+
 
 
 class ChatContainer(VerticalScroll):

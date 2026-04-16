@@ -221,7 +221,10 @@ class AsyncCompletions:
             async for line in resp.aiter_lines():
                 done, chunk = _parse_sse_data_line(line)
                 if done: break
-                if chunk: yield chunk
+                if chunk:
+                    yield chunk
+                    await asyncio.sleep(0)  # Yield to event loop for smoother TUI updates
+
 
 
 def _build_payload(
@@ -239,16 +242,22 @@ def _build_payload(
 
 
 def _parse_sse_data_line(raw_line: str) -> tuple[bool, dict[str, Any] | None]:
+    prefix = "data:"
     line = raw_line.strip()
-    if not line.startswith(SSE_DATA_PREFIX):
+    if not line.startswith(prefix):
         return False, None
-    data = line[len(SSE_DATA_PREFIX) :]
-    if data == SSE_DONE_MARKER:
+    
+    data = line[len(prefix) :].strip()
+    if data == "[DONE]":
         return True, None
+    if not data:
+        return False, None
+        
     try:
         return False, json.loads(data)
     except json.JSONDecodeError:
         return False, None
+
 
 
 

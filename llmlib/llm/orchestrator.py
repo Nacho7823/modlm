@@ -48,29 +48,47 @@ class ChatOrchestrator:
         if not tools: return
 
         while True:
-            step = await self._client.chat_async.completions.create(
-                messages=history, tools=tools, tool_choice="auto"
-            )
-            if not step.choices: return
-            
-            choice = step.choices[0]
-            msg, tool_calls = choice.message, choice.tool_calls
-            
-            # Record assistant msg in history
-            history_entry = msg.to_dict()
-            if tool_calls: 
-                history_entry["tool_calls"] = ToolCall.wrap_raw_list(tool_calls)
-            history.append(history_entry)
+            full_msg, tool_calls_map = Message(role="assistant"), {}
+            async for chunk_raw in await self._client.chat_async.completions.create(
+                messages=history, tools=tools, tool_choice="auto", stream=True
+            ):
+                chunk = ChatCompletion.from_raw(chunk_raw)
+                if not chunk.choices: continue
+                delta = chunk.choices[0].message
+                
+                if delta.thinking:
+                    full_msg.thinking += delta.thinking
+                    yield StreamEvent.thinking(delta.thinking)
+                if delta.content:
+                    full_msg.content += delta.content
+                    yield StreamEvent.content(delta.content)
+                
+                # Accumulate tool calls from stream
+                for tc_raw in chunk.tool_calls:
+                    idx = tc_raw.get("index", 0)
+                    if idx not in tool_calls_map: tool_calls_map[idx] = tc_raw
+                    else:
+                        # Merge function arguments
+                        curr_func = tool_calls_map[idx].get("function", {})
+                        new_func = tc_raw.get("function", {})
+                        curr_func["arguments"] = curr_func.get("arguments", "") + new_func.get("arguments", "")
 
-            if msg.thinking: yield StreamEvent.thinking(msg.thinking)
-            if msg.content: yield StreamEvent.content(msg.content)
-            if not tool_calls: return
+            # Convert accumulated map back to list
+            tool_calls = sorted(tool_calls_map.values(), key=lambda x: x.get("index", 0))
+            if not full_msg.content and not full_msg.thinking and not tool_calls: break
+
+            history_entry = full_msg.to_dict()
+            if tool_calls: history_entry["tool_calls"] = ToolCall.wrap_raw_list(tool_calls)
+            history.append(history_entry)
+            
+            if not tool_calls: break
 
             # Execute tools and add results to history
             results = await self._tool_executor.execute_batch(tool_calls, targets)
             for res in results:
                 yield StreamEvent.content(f"\n[bold green]🛠 Tool [cyan]{res['tool_call_id']}[/cyan]:[/bold green] {res['content']}\n")
             history.extend(results)
+
 
     async def _emit_final(
         self, history: list[dict[str, Any]], tools: list[Tool], stream: bool
@@ -80,13 +98,15 @@ class ChatOrchestrator:
             async for chunk_raw in await self._client.chat_async.completions.create(
                 messages=history, tools=tools or None, stream=True
             ):
+                emitted = True
                 chunk = ChatCompletion.from_raw(chunk_raw)
                 if not chunk.choices: continue
                 msg = chunk.choices[0].message
-                if msg.thinking: yield StreamEvent.thinking(msg.thinking); emitted = True
-                if msg.content: yield StreamEvent.content(msg.content); emitted = True
+                if msg.thinking: yield StreamEvent.thinking(msg.thinking)
+                if msg.content: yield StreamEvent.content(msg.content)
             
             if emitted: return
+
 
         # Fallback or non-streaming
         resp = await self._client.chat_async.completions.create(messages=history, tools=tools or None)

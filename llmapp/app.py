@@ -7,8 +7,8 @@ from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Header, Footer, Input
 
-from llmlib import ChatRuntime
 from llmlib import ChatRuntime, LLMSettings, MCPServerConfig, Message, OpenAI, StreamEvent
+
 from .config import ConfigManager
 from .history import ConversationManager
 from .command import CommandHandler
@@ -135,9 +135,10 @@ class ChatApp(App):
         self.stream_controller.cancel_active_stream(notify=False)
         # Ensure persistent MCP clients are disconnected
         try:
-            await self._app.runtime.shutdown()
+            await self.runtime.shutdown()
         except Exception:
             pass
+
             
         task = self._streaming_task
         if task:
