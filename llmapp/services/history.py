@@ -2,8 +2,6 @@
 
 from typing import Any
 
-from ..widgets import ChatContainer
-
 
 class HistoryService:
     """Handles conversation history and session management."""

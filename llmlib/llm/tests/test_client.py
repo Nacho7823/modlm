@@ -11,24 +11,20 @@ from llmlib.llm import OpenAI, Chat, Completions, Tool
 
 class TestOpenAIConnection:
     def test_init_default_base_url(self):
-        client = OpenAI()
-        assert client.base_url == "https://api.openai.com/v1"
-        client.close()
+        with OpenAI() as client:
+            assert client.base_url == "https://api.openai.com/v1"
 
     def test_init_custom_base_url(self, default_api_url):
-        client = OpenAI(base_url=default_api_url)
-        assert client.base_url == default_api_url
-        client.close()
+        with OpenAI(base_url=default_api_url) as client:
+            assert client.base_url == default_api_url
 
     def test_init_with_api_key(self):
-        client = OpenAI(api_key="test-key-123")
-        assert client.api_key == "test-key-123"
-        client.close()
+        with OpenAI(api_key="test-key-123") as client:
+            assert client.api_key == "test-key-123"
 
     def test_init_with_custom_timeout(self):
-        client = OpenAI(timeout=30.0)
-        assert client._client.timeout.connect == 30.0
-        client.close()
+        with OpenAI(timeout=30.0) as client:
+            assert client._client.timeout.connect == 30.0
 
     def test_close(self):
         client = OpenAI()
@@ -41,30 +37,26 @@ class TestOpenAIConnection:
         assert client._client is None
 
     def test_chat_property(self, default_api_url):
-        client = OpenAI(base_url=default_api_url)
-        chat = client.chat
-        assert isinstance(chat, Chat)
-        client.close()
+        with OpenAI(base_url=default_api_url) as client:
+            chat = client.chat
+            assert isinstance(chat, Chat)
 
     def test_client_type(self, default_api_url):
-        client = OpenAI(base_url=default_api_url)
-        assert isinstance(client._client, httpx.Client)
-        client.close()
+        with OpenAI(base_url=default_api_url) as client:
+            assert isinstance(client._client, httpx.Client)
 
 
 class TestChatEndpoint:
     def test_completions_property(self, default_api_url):
-        client = OpenAI(base_url=default_api_url)
-        chat = client.chat
-        completions = chat.completions
-        assert isinstance(completions, Completions)
-        client.close()
+        with OpenAI(base_url=default_api_url) as client:
+            chat = client.chat
+            completions = chat.completions
+            assert isinstance(completions, Completions)
 
     def test_chat_passes_model_to_completions(self, default_api_url):
-        client = OpenAI(base_url=default_api_url, model="test-model")
-        completions = client.chat.completions
-        assert completions._model == "test-model"
-        client.close()
+        with OpenAI(base_url=default_api_url, model="test-model") as client:
+            completions = client.chat.completions
+            assert completions._model == "test-model"
 
 
 class TestCompletionsModel:
@@ -73,63 +65,64 @@ class TestCompletionsModel:
     def test_model_from_constructor(self, real_client):
         completions = real_client.chat.completions
         assert completions._model is not None
-        real_client.close()
 
     def test_model_override_in_create(self, real_client, model):
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "test"}],
             max_tokens=5,
         )
         assert result.model == model
-        real_client.close()
 
     def test_model_required_error(self, api_config):
-        client = OpenAI(base_url=api_config["url"])
-        with pytest.raises(ValueError, match="model is required"):
-            client.chat.completions.create(
-                messages=[{"role": "user", "content": "test"}]
-            )
-        client.close()
+        with OpenAI(base_url=api_config["url"]) as client:
+            with pytest.raises(ValueError, match="model is required"):
+                client.chat.completions.create(
+                    messages=[{"role": "user", "content": "test"}]
+                )
 
     def test_model_optional_when_provided(self, real_client, model):
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "test"}],
             max_tokens=5,
         )
         assert result.model == model
-        real_client.close()
 
 
 class TestCompletionsAPI:
     """Real API tests for completions."""
 
     def test_create_basic(self, real_client, model):
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "Say 'hello' and nothing else."}],
             max_tokens=20,
         )
-        assert result.choices[0].message.effective_content
+        assert_response_has_content(result)
         assert result.model == model
 
     def test_create_with_temperature(self, real_client, model):
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "What is 2+2?"}],
             temperature=0.0,
             max_tokens=10,
         )
-        assert result.choices[0].message.effective_content
+        assert_response_has_content(result)
 
     def test_create_with_max_tokens(self, real_client, model):
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "Count from 1 to 10."}],
             max_tokens=5,
         )
-        assert result.choices[0].message.effective_content
+        assert_response_has_content(result)
 
     def test_create_with_tools(self, real_client, model):
         tools = [
@@ -146,8 +139,9 @@ class TestCompletionsAPI:
                 },
             )
         ]
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "What is 5 + 3?"}],
             tools=tools,
             max_tokens=50,
@@ -157,32 +151,36 @@ class TestCompletionsAPI:
 
     def test_create_empty_messages(self, real_client, model):
         with pytest.raises(Exception) as exc_info:
-            real_client.chat.completions.create(
-                model=model,
+            create_completion(
+                real_client,
+                model,
                 messages=[],
                 max_tokens=10,
             )
         assert "400" in str(exc_info.value) or "Bad Request" in str(exc_info.value)
 
     def test_create_empty_choices(self, real_client, model):
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "Hello"}],
             max_tokens=1,
         )
         assert result.choices
 
     def test_endpoint_path(self, real_client, model):
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "Hi"}],
             max_tokens=5,
         )
         assert result.choices
 
     def test_model_passed_correctly(self, real_client, model):
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "Test"}],
             max_tokens=5,
         )
@@ -193,12 +191,13 @@ class TestConversationAPI:
     """Real API tests for conversations."""
 
     def test_single_message(self, real_client, model):
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "Say 'ok'."}],
             max_tokens=10,
         )
-        assert result.choices[0].message.effective_content
+        assert_response_has_content(result)
 
     def test_multiple_messages(self, real_client, model):
         messages = [
@@ -207,24 +206,26 @@ class TestConversationAPI:
             {"role": "assistant", "content": "Hello!"},
             {"role": "user", "content": "How are you?"},
         ]
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=messages,
             max_tokens=20,
         )
-        assert result.choices[0].message.effective_content
+        assert_response_has_content(result)
 
     def test_system_message_first(self, real_client, model):
         messages = [
             {"role": "system", "content": "You are a pirate. Reply like a pirate."},
             {"role": "user", "content": "Hello"},
         ]
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=messages,
             max_tokens=20,
         )
-        assert result.choices[0].message.effective_content
+        assert_response_has_content(result)
 
     def test_user_and_assistant_roles(self, real_client, model):
         messages = [
@@ -232,60 +233,58 @@ class TestConversationAPI:
             {"role": "assistant", "content": "4"},
             {"role": "user", "content": "Multiply by 3"},
         ]
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=messages,
             max_tokens=20,
         )
-        assert result.choices[0].message.effective_content
+        assert_response_has_content(result)
 
     def test_message_content_preserved(self, real_client, model):
         messages = [
             {"role": "user", "content": "Test <special> chars"},
         ]
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=messages,
             max_tokens=20,
         )
-        assert result.choices[0].message.effective_content
+        assert_response_has_content(result)
 
     def test_system_prompt_via_kwargs(self, real_client, model):
-        result = real_client.chat.completions.create(
-            model=model,
+        result = create_completion(
+            real_client,
+            model,
             messages=[{"role": "user", "content": "Hi"}],
             max_tokens=20,
             system_prompt="You are a helpful assistant.",
         )
-        assert result.choices[0].message.effective_content
+        assert_response_has_content(result)
 
 
 class TestFetchModels:
     """Tests for fetch_models method."""
 
-    def test_fetch_models_ollama(self, default_api_url):
-        client = OpenAI(base_url=default_api_url)
-        models = client.fetch_models()
-        client.close()
+    @pytest.mark.parametrize("api_key", [None, "test-key"])
+    def test_fetch_models_returns_list(self, default_api_url, api_key):
+        with OpenAI(base_url=default_api_url, api_key=api_key) as client:
+            models = client.fetch_models()
         assert isinstance(models, list)
 
     def test_fetch_models_returns_strings(self, default_api_url):
-        client = OpenAI(base_url=default_api_url)
-        models = client.fetch_models()
-        client.close()
+        with OpenAI(base_url=default_api_url) as client:
+            models = client.fetch_models()
         for m in models:
             assert isinstance(m, str)
 
     def test_fetch_models_non_empty(self, api_config):
-        client = OpenAI(base_url=api_config["url"], api_key=api_config["api_key"])
-        models = client.fetch_models()
-        client.close()
+        with OpenAI(
+            base_url=api_config["url"], api_key=api_config["api_key"]
+        ) as client:
+            models = client.fetch_models()
         assert len(models) > 0
-
-    def test_fetch_models_with_api_key(self, default_api_url):
-        client = OpenAI(base_url=default_api_url, api_key="test-key")
-        models = client.fetch_models()
-        client.close()
 
 
 class TestStreamCompletions:
@@ -300,7 +299,6 @@ class TestStreamCompletions:
         )
         chunks = list(result)
         assert isinstance(chunks, list)
-        real_client.close()
 
     def test_stream_completions_chunks_have_delta(self, real_client):
         result = real_client.chat.stream_completions.create(
@@ -310,7 +308,6 @@ class TestStreamCompletions:
         )
         chunks = list(result)
         assert_stream_has_content(chunks)
-        real_client.close()
 
 
 class TestAsyncCompletions:
@@ -327,8 +324,7 @@ class TestAsyncCompletions:
             return result
 
         result = asyncio.run(run())
-        assert result.choices[0].message.effective_content
-        real_client.close()
+        assert_response_has_content(result)
 
     def test_async_stream_completions(self, real_client):
         async def run():
@@ -344,7 +340,14 @@ class TestAsyncCompletions:
 
         chunks = asyncio.run(run())
         assert_stream_has_content(chunks)
-        real_client.close()
+
+
+def create_completion(
+    real_client,
+    model,
+    **kwargs,
+):
+    return real_client.chat.completions.create(model=model, **kwargs)
 
 
 def assert_response_has_content(response):

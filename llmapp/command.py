@@ -61,20 +61,19 @@ class CommandHandler:
         return Command(name=name, args=args, raw=text)
 
     def execute(self, command: Command) -> str:
-        if command.name == "help":
-            return self._help()
-        if command.name == "config":
-            return self._config()
-        if command.name == "mcp":
-            return self._mcp(command.args)
-        if command.name == "session":
-            return self._session(command.args)
-        if command.name == "new":
-            return self._new()
-        if command.name == "streaming":
-            return self._streaming(command.args)
-        if command.name in ("quit", "q"):
-            return self._quit()
+        handlers: dict[str, Callable[[], str]] = {
+            "help": self._help,
+            "config": self._config,
+            "mcp": lambda: self._mcp(command.args),
+            "session": lambda: self._session(command.args),
+            "new": self._new,
+            "streaming": lambda: self._streaming(command.args),
+            "quit": self._quit,
+            "q": self._quit,
+        }
+        handler = handlers.get(command.name)
+        if handler:
+            return handler()
         return f"Unknown command: /{command.name}"
 
     def _help(self) -> str:
@@ -102,12 +101,7 @@ class CommandHandler:
         if subcmd == "list":
             if self.mcp_list_handler:
                 servers = self.mcp_list_handler()
-                if not servers:
-                    return "No MCP servers configured."
-                lines = ["Configured MCP servers:"]
-                for name, url in servers.items():
-                    lines.append(f"  {name}: {url}")
-                return "\n".join(lines)
+                return self._format_mcp_servers(servers)
             return "No MCP servers configured."
         if subcmd == "remove":
             if len(args) < 2:
@@ -120,15 +114,7 @@ class CommandHandler:
 
     def _session(self, args: list[str]) -> str:
         if not args:
-            if self.session_list_handler:
-                sessions = self.session_list_handler()
-                if not sessions:
-                    return "No saved conversations."
-                lines = ["Saved conversations:"]
-                for s in sessions:
-                    lines.append(f"  {s['name']} ({s['message_count']} messages)")
-                return "\n".join(lines)
-            return "No saved conversations."
+            return self._list_sessions()
         subcmd = args[0].lower()
         if subcmd == "load":
             if len(args) < 2:
@@ -145,16 +131,29 @@ class CommandHandler:
                 return self.session_delete_handler(name)
             return f"Conversation '{name}' would be deleted."
         if subcmd == "list":
-            if self.session_list_handler:
-                sessions = self.session_list_handler()
-                if not sessions:
-                    return "No saved conversations."
-                lines = ["Saved conversations:"]
-                for s in sessions:
-                    lines.append(f"  {s['name']} ({s['message_count']} messages)")
-                return "\n".join(lines)
-            return "No saved conversations."
+            return self._list_sessions()
         return f"Unknown session subcommand: {subcmd}"
+
+    def _list_sessions(self) -> str:
+        if self.session_list_handler:
+            sessions = self.session_list_handler()
+            if not sessions:
+                return "No saved conversations."
+            lines = ["Saved conversations:"]
+            for session in sessions:
+                lines.append(
+                    f"  {session['name']} ({session['message_count']} messages)"
+                )
+            return "\n".join(lines)
+        return "No saved conversations."
+
+    def _format_mcp_servers(self, servers: dict[str, str]) -> str:
+        if not servers:
+            return "No MCP servers configured."
+        lines = ["Configured MCP servers:"]
+        for name, url in servers.items():
+            lines.append(f"  {name}: {url}")
+        return "\n".join(lines)
 
     def _new(self) -> str:
         if self.new_handler:

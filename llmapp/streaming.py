@@ -5,6 +5,8 @@ from typing import Any, AsyncIterator
 
 from llmlib.llm import OpenAI, Tool, ToolCall
 
+MAX_TOOL_STEPS = 4
+
 
 class StreamResponder:
     """Handles LLM streaming, yielding chunks to caller."""
@@ -23,105 +25,145 @@ class StreamResponder:
         streaming_enabled: bool = True,
     ) -> AsyncIterator[tuple[str, str]]:
         """Yield (content, reasoning_content) chunks from the LLM."""
+        self._ensure_client()
+
+        request_messages = self._prepare_request_messages(messages)
+        tools, tool_targets = await self._build_tool_list()
+
+        async for thinking in self._resolve_tool_calls(
+            request_messages,
+            tools,
+            tool_targets,
+        ):
+            yield ("", thinking)
+
+        async for chunk in self._emit_final_response(
+            request_messages,
+            tools,
+            streaming_enabled,
+        ):
+            yield chunk
+
+    def _ensure_client(self) -> None:
         if not self._client:
             raise ValueError("LLM client not initialized")
 
-        request_messages: list[dict[str, Any]] = []
-        for m in messages:
-            role = m.get("role")
-            content = m.get("content", "")
-            tool_calls = m.get("tool_calls")
+    def _prepare_request_messages(
+        self,
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        prepared: list[dict[str, Any]] = []
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content", "")
+            tool_calls = message.get("tool_calls")
 
             if role == "assistant" and not content and not tool_calls:
                 continue
 
-            msg = {"role": m["role"], "content": m.get("content", "")}
+            prepared_message = {"role": message["role"], "content": content}
             if tool_calls:
-                msg["tool_calls"] = tool_calls
-            if "tool_call_id" in m:
-                msg["tool_call_id"] = m["tool_call_id"]
-            if "reasoning_content" in m and m["reasoning_content"]:
-                msg["reasoning_content"] = m["reasoning_content"]
-            request_messages.append(msg)
+                prepared_message["tool_calls"] = tool_calls
+            if "tool_call_id" in message:
+                prepared_message["tool_call_id"] = message["tool_call_id"]
+            if message.get("reasoning_content"):
+                prepared_message["reasoning_content"] = message["reasoning_content"]
+            prepared.append(prepared_message)
 
-        tools, tool_targets = await self._build_tool_list()
+        return prepared
 
-        if tools:
-            executed_calls: set[str] = set()
-            for _ in range(4):
-                step = await self._client.chat_async.completions.create(
-                    messages=request_messages,
-                    tools=tools,
-                    tool_choice="auto",
-                )
+    async def _resolve_tool_calls(
+        self,
+        request_messages: list[dict[str, Any]],
+        tools: list[Tool],
+        tool_targets: dict[str, tuple[Any, str]],
+    ) -> AsyncIterator[str]:
+        if not tools:
+            return
 
-                choice = step.choices[0] if step.choices else None
-                if not choice:
-                    break
+        executed_calls: set[str] = set()
+        for _ in range(MAX_TOOL_STEPS):
+            step = await self._client.chat_async.completions.create(
+                messages=request_messages,
+                tools=tools,
+                tool_choice="auto",
+            )
+            choice = step.choices[0] if step.choices else None
+            if not choice:
+                return
 
-                assistant_message: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": choice.message.content or "",
-                }
-                reasoning_content = (
-                    getattr(choice.message, "reasoning_content", "") or ""
-                )
-                if reasoning_content:
-                    assistant_message["reasoning_content"] = reasoning_content
-                if choice.tool_calls:
-                    assistant_message["tool_calls"] = choice.tool_calls
+            tool_calls = choice.tool_calls or []
+            reasoning_content = self._append_assistant_message(request_messages, choice)
+            if reasoning_content:
+                yield reasoning_content
 
-                request_messages.append(assistant_message)
+            if not tool_calls:
+                return
 
-                if reasoning_content:
-                    yield ("", reasoning_content)
+            call_keys = self._build_call_keys(tool_calls)
+            if call_keys and call_keys.issubset(executed_calls):
+                return
 
-                if not choice.tool_calls:
-                    break
+            request_messages.extend(
+                await self._execute_mcp_tool_calls(tool_calls, tool_targets)
+            )
+            executed_calls.update(call_keys)
 
-                call_keys = {
-                    f"{tc.name}:{json.dumps(tc.arguments, sort_keys=True)}"
-                    for tc in (ToolCall.from_dict(data) for data in choice.tool_calls)
-                }
-                if call_keys and call_keys.issubset(executed_calls):
-                    break
+    def _append_assistant_message(
+        self, request_messages: list[dict[str, Any]], choice: Any
+    ) -> str:
+        assistant_message: dict[str, Any] = {
+            "role": "assistant",
+            "content": choice.message.content or "",
+        }
 
-                tool_results = await self._execute_mcp_tool_calls(
-                    choice.tool_calls, tool_targets
-                )
-                for tool_result in tool_results:
-                    request_messages.append(tool_result)
+        reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
+        if reasoning_content:
+            assistant_message["reasoning_content"] = reasoning_content
+        if choice.tool_calls:
+            assistant_message["tool_calls"] = choice.tool_calls
 
-                executed_calls.update(call_keys)
+        request_messages.append(assistant_message)
+        return reasoning_content
+
+    def _build_call_keys(self, tool_calls: list[dict[str, Any]]) -> set[str]:
+        return {
+            f"{tool_call.name}:{json.dumps(tool_call.arguments, sort_keys=True)}"
+            for tool_call in (ToolCall.from_dict(data) for data in tool_calls)
+        }
+
+    async def _emit_final_response(
+        self,
+        request_messages: list[dict[str, Any]],
+        tools: list[Tool],
+        streaming_enabled: bool,
+    ) -> AsyncIterator[tuple[str, str]]:
+        final_tools = tools or None
 
         if streaming_enabled:
             emitted = False
             async for chunk in await self._client.chat_async.completions.create(
                 messages=request_messages,
-                tools=tools or None,
+                tools=final_tools,
                 stream=True,
             ):
-                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                content = delta.get("content", "")
-                reasoning = delta.get("reasoning_content", "")
+                content, reasoning = self._extract_delta_text(chunk)
                 if content or reasoning:
                     emitted = True
                 yield (content, reasoning)
+
             if emitted:
                 return
 
-            content, reasoning = await self._final_non_stream_response(
-                request_messages,
-                tools or None,
-            )
-            yield (content, reasoning)
-            return
-
         content, reasoning = await self._final_non_stream_response(
             request_messages,
-            tools or None,
+            final_tools,
         )
         yield (content, reasoning)
+
+    def _extract_delta_text(self, chunk: dict[str, Any]) -> tuple[str, str]:
+        delta = chunk.get("choices", [{}])[0].get("delta", {})
+        return delta.get("content", ""), delta.get("reasoning_content", "")
 
     async def _final_non_stream_response(
         self,

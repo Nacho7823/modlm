@@ -22,16 +22,15 @@ MODEL = os.getenv("LLM_MODEL", "llama3.2:1b")
 def is_api_available() -> bool:
     """Check if the API is available (returns 200)."""
     try:
-        client = OpenAI(base_url=API_URL, api_key=API_KEY)
-        response = client._client.post(
-            f"{API_URL.rstrip('/')}/chat/completions",
-            json={
-                "model": MODEL,
-                "messages": [{"role": "user", "content": "hi"}],
-                "max_tokens": 5,
-            },
-        )
-        client.close()
+        with OpenAI(base_url=API_URL, api_key=API_KEY) as client:
+            response = client._client.post(
+                f"{API_URL.rstrip('/')}/chat/completions",
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 5,
+                },
+            )
         return response.status_code == 200
     except Exception:
         return False

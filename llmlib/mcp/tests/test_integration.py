@@ -2,36 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-import platform
-import socket
-
 import pytest
 
 from llmlib.mcp import LocalMCPClient, HTTPMCPClient, MCPConnectionError
-
-NOTEPAD_HTTP_PORT = 19876
-
-
-def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
-    """Check if a port is open on a host."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except (socket.timeout, ConnectionRefusedError, OSError):
-        return False
-
-
-async def wait_for_port(host: str, port: int, timeout: float = 30.0) -> bool:
-    """Wait for a port to become available."""
-    import time
-
-    start = time.time()
-    while time.time() - start < timeout:
-        if is_port_open(host, port, timeout=1.0):
-            return True
-        await asyncio.sleep(0.5)
-    return False
 
 
 @pytest.mark.integration

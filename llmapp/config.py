@@ -35,11 +35,16 @@ class ConfigManager:
 
     def load(self) -> dict[str, Any]:
         env_path = self.config_dir.parent / ".env"
-        load_dotenv(env_path)
+        load_dotenv(env_path, verbose=True)
 
-        env_url = load_dotenv(env_path, verbose=True)
         self._config = dict(self.DEFAULT_CONFIG)
 
+        self._load_from_env()
+        self._load_from_file()
+
+        return self._config
+
+    def _load_from_env(self) -> None:
         self._config["api_url"] = self._load_env("LLM_API_URL", self._config["api_url"])
         self._config["api_key"] = self._load_env("LLM_API_KEY", "")
         self._config["model"] = self._load_env("LLM_MODEL", self._config["model"])
@@ -47,41 +52,45 @@ class ConfigManager:
             "LLM_STREAMING", self._config["streaming"]
         )
 
-        if self.config_file.exists():
-            with open(self.config_file, "r") as f:
-                file_config = json.load(f)
-                for key, value in file_config.items():
-                    if key == "mcp_servers":
-                        self._config["mcp_servers"] = value
-                    elif key not in ("api_url", "api_key", "model"):
-                        self._config[key] = value
-                if "api_url" in file_config:
-                    self._config["api_url"] = file_config["api_url"]
-                if "api_key" in file_config:
-                    self._config["api_key"] = file_config["api_key"]
-                if "model" in file_config:
-                    self._config["model"] = file_config["model"]
-                if "streaming" in file_config:
-                    self._config["streaming"] = bool(file_config["streaming"])
+    def _load_from_file(self) -> None:
+        if not self.config_file.exists():
+            return
 
-        return self._config
+        with open(self.config_file, "r", encoding="utf-8") as file_handle:
+            file_config = json.load(file_handle)
+
+        self._merge_non_api_keys(file_config)
+        self._override_api_keys(file_config)
+
+    def _merge_non_api_keys(self, file_config: dict[str, Any]) -> None:
+        for key, value in file_config.items():
+            if key == "mcp_servers":
+                self._config["mcp_servers"] = value
+            elif key not in ("api_url", "api_key", "model"):
+                self._config[key] = value
+
+    def _override_api_keys(self, file_config: dict[str, Any]) -> None:
+        if "api_url" in file_config:
+            self._config["api_url"] = file_config["api_url"]
+        if "api_key" in file_config:
+            self._config["api_key"] = file_config["api_key"]
+        if "model" in file_config:
+            self._config["model"] = file_config["model"]
+        if "streaming" in file_config:
+            self._config["streaming"] = bool(file_config["streaming"])
 
     def _load_env(self, key: str, default: str) -> str:
-        import os
-
         return os.environ.get(key, default)
 
     def _load_env_bool(self, key: str, default: bool) -> bool:
-        import os
-
         raw = os.environ.get(key)
         if raw is None:
             return default
         return raw.lower() in ("1", "true", "yes", "on")
 
     def save(self) -> None:
-        with open(self.config_file, "w") as f:
-            json.dump(self._config, f, indent=2)
+        with open(self.config_file, "w", encoding="utf-8") as file_handle:
+            json.dump(self._config, file_handle, indent=2)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self._config.get(key, default)

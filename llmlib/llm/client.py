@@ -15,6 +15,11 @@ if TYPE_CHECKING:
     import asyncio
 
 
+CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
+SSE_DATA_PREFIX = "data: "
+SSE_DONE_MARKER = "[DONE]"
+
+
 class OpenAI:
     """OpenAI-compatible client without API key requirement."""
 
@@ -29,6 +34,7 @@ class OpenAI:
         self.api_key = api_key
         self.base_url = base_url or "https://api.openai.com/v1"
         self.model = model
+        self.timeout = timeout
         self._client = httpx.Client(
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout),
@@ -60,7 +66,7 @@ class OpenAI:
         if self._async_client is None:
             self._async_client = httpx.AsyncClient(
                 base_url=self.base_url,
-                timeout=httpx.Timeout(60.0),
+                timeout=httpx.Timeout(self.timeout),
             )
         return AsyncChat(self._async_client, self.base_url, self.model)
 
@@ -153,20 +159,15 @@ class Completions:
     def create(
         self,
         model: str | None = None,
-        messages: Sequence[dict[str, str]] | None = None,
+        messages: Sequence[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
         tools: list[Tool] | None = None,
         **kwargs: Any,
     ) -> ChatCompletion:
-        final_model = model or self._model
-        if not final_model:
-            raise ValueError("model is required")
-        if messages is None:
-            messages = []
-
-        payload = _build_payload(
-            model=final_model,
+        final_model, payload = _prepare_completion_request(
+            default_model=self._model,
+            model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -175,7 +176,7 @@ class Completions:
         )
 
         response = self._client.post(
-            "/chat/completions",
+            CHAT_COMPLETIONS_ENDPOINT,
             json=payload,
         )
         response.raise_for_status()
@@ -194,20 +195,15 @@ class StreamCompletions:
     def create(
         self,
         model: str | None = None,
-        messages: Sequence[dict[str, str]] | None = None,
+        messages: Sequence[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
         tools: list[Tool] | None = None,
         **kwargs: Any,
     ) -> Iterator[dict[str, Any]]:
-        final_model = model or self._model
-        if not final_model:
-            raise ValueError("model is required")
-        if messages is None:
-            messages = []
-
-        payload = _build_payload(
-            model=final_model,
+        _, payload = _prepare_completion_request(
+            default_model=self._model,
+            model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -218,20 +214,16 @@ class StreamCompletions:
 
         with self._client.stream(
             "POST",
-            "/chat/completions",
+            CHAT_COMPLETIONS_ENDPOINT,
             json=payload,
         ) as response:
             response.raise_for_status()
             for line in response.iter_lines():
-                line = line.strip()
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
-                        break
-                    try:
-                        yield json.loads(data)
-                    except json.JSONDecodeError:
-                        pass
+                done, chunk = _parse_sse_data_line(line)
+                if done:
+                    break
+                if chunk is not None:
+                    yield chunk
 
 
 class AsyncCompletions:
@@ -244,21 +236,16 @@ class AsyncCompletions:
     async def create(
         self,
         model: str | None = None,
-        messages: Sequence[dict[str, str]] | None = None,
+        messages: Sequence[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
         tools: list[Tool] | None = None,
         stream: bool = False,
         **kwargs: Any,
     ) -> ChatCompletion | AsyncIterator[dict[str, Any]]:
-        final_model = model or self._model
-        if not final_model:
-            raise ValueError("model is required")
-        if messages is None:
-            messages = []
-
-        payload = _build_payload(
-            model=final_model,
+        final_model, payload = _prepare_completion_request(
+            default_model=self._model,
+            model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -273,7 +260,7 @@ class AsyncCompletions:
 
     async def _create_sync(self, payload: dict[str, Any], model: str) -> ChatCompletion:
         response = await self._client.post(
-            "/chat/completions",
+            CHAT_COMPLETIONS_ENDPOINT,
             json=payload,
         )
         response.raise_for_status()
@@ -287,27 +274,70 @@ class AsyncCompletions:
         try:
             async with self._client.stream(
                 "POST",
-                "/chat/completions",
+                CHAT_COMPLETIONS_ENDPOINT,
                 json=payload,
             ) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
-                    line = line.strip()
-                    if line.startswith("data: "):
-                        data = line[6:]
-                        if data == "[DONE]":
-                            break
-                        try:
-                            yield json.loads(data)
-                        except json.JSONDecodeError:
-                            pass
+                    done, chunk = _parse_sse_data_line(line)
+                    if done:
+                        break
+                    if chunk is not None:
+                        yield chunk
         except asyncio.CancelledError:
             raise
 
 
+def _prepare_completion_request(
+    default_model: str | None,
+    model: str | None,
+    messages: Sequence[dict[str, Any]] | None,
+    temperature: float | None,
+    max_tokens: int | None,
+    tools: list[Tool] | None,
+    **kwargs: Any,
+) -> tuple[str, dict[str, Any]]:
+    final_model = model or default_model
+    if not final_model:
+        raise ValueError("model is required")
+
+    payload = _build_payload(
+        model=final_model,
+        messages=_normalize_messages(messages),
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools=tools,
+        **kwargs,
+    )
+    return final_model, payload
+
+
+def _normalize_messages(
+    messages: Sequence[dict[str, Any]] | None,
+) -> Sequence[dict[str, Any]]:
+    if messages is None:
+        return []
+    return messages
+
+
+def _parse_sse_data_line(raw_line: str) -> tuple[bool, dict[str, Any] | None]:
+    line = raw_line.strip()
+    if not line.startswith(SSE_DATA_PREFIX):
+        return False, None
+
+    data = line[len(SSE_DATA_PREFIX) :]
+    if data == SSE_DONE_MARKER:
+        return True, None
+
+    try:
+        return False, json.loads(data)
+    except json.JSONDecodeError:
+        return False, None
+
+
 def _build_payload(
     model: str,
-    messages: Sequence[dict[str, str]],
+    messages: Sequence[dict[str, Any]],
     temperature: float | None,
     max_tokens: int | None,
     tools: list[Tool] | None,
@@ -347,14 +377,12 @@ def _parse_choices(choices_data: list[dict[str, Any]]) -> list[Choice]:
     for i, choice_data in enumerate(choices_data):
         message_data = choice_data.get("message", {})
         message = Message(
-            content=message_data.get("content", ""),
+            content=message_data.get("content") or "",
             role=message_data.get("role", "assistant"),
             reasoning_content=message_data.get("reasoning_content"),
         )
 
-        tool_calls = choice_data.get("tool_calls")
-        if tool_calls is None:
-            tool_calls = message_data.get("tool_calls", [])
+        tool_calls = _extract_tool_calls(choice_data, message_data)
         finish_reason = choice_data.get("finish_reason")
 
         choices.append(
@@ -367,3 +395,12 @@ def _parse_choices(choices_data: list[dict[str, Any]]) -> list[Choice]:
         )
 
     return choices
+
+
+def _extract_tool_calls(
+    choice_data: dict[str, Any], message_data: dict[str, Any]
+) -> list[dict[str, Any]]:
+    tool_calls = choice_data.get("tool_calls")
+    if tool_calls is not None:
+        return tool_calls
+    return message_data.get("tool_calls", [])

@@ -14,6 +14,7 @@ from .history import ConversationManager
 from .command import CommandHandler
 from .widgets import ChatContainer, ChatInput
 from .streaming import StreamResponder
+from .constants import THINKING_PLACEHOLDER
 from .services import ConfigService, HistoryService, MCPService
 
 
@@ -61,32 +62,26 @@ class ChatApp(App):
         self.client: OpenAI | None = None
         self.client_async: OpenAI | None = None
         self.mcp_clients: dict[str, Any] = {}
+        self.config_service = ConfigService(self)
+        self.history_service = HistoryService(self)
+        self.mcp_service = MCPService(self)
         self.command_handler = self._create_command_handler()
-        self.services = self._create_services()
         self._streaming_task: asyncio.Task | None = None
         self._streaming_active = False
-        self._quit_requested = False
 
     def _create_command_handler(self) -> CommandHandler:
         return CommandHandler(
             config_handler=self._show_config,
-            mcp_add_handler=self._mcp_add,
-            mcp_list_handler=self._mcp_list,
-            mcp_remove_handler=self._mcp_remove,
-            session_list_handler=self._sessions_list,
-            session_load_handler=self._sessions_load,
-            session_delete_handler=self._sessions_delete,
+            mcp_add_handler=self._add_mcp_server,
+            mcp_list_handler=self._list_mcp_servers,
+            mcp_remove_handler=self._remove_mcp_server,
+            session_list_handler=self._list_sessions,
+            session_load_handler=self._load_session,
+            session_delete_handler=self._delete_session,
             new_handler=self._new_conversation,
             streaming_handler=self._streaming_command,
             quit_handler=self._request_quit,
         )
-
-    def _create_services(self) -> dict[str, Any]:
-        return {
-            "config": ConfigService(self),
-            "history": HistoryService(self),
-            "mcp": MCPService(self),
-        }
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -102,7 +97,7 @@ class ChatApp(App):
 
     def on_mount(self) -> None:
         self.config_manager.load()
-        self.services["config"].init_clients()
+        self.config_service.init_clients()
         self.query_one("#chat-input", ChatInput).focus()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -113,14 +108,7 @@ class ChatApp(App):
         input_widget = self.query_one("#chat-input", ChatInput)
         input_widget.value = ""
 
-        cmd = self.command_handler.parse(text)
-        if cmd:
-            result = self.command_handler.execute(cmd)
-            if result == "quit":
-                self._quit_requested = True
-                self.exit()
-            elif result:
-                self._add_system_message(result)
+        if self._handle_command(text):
             return
 
         await self._send_message(text)
@@ -128,15 +116,32 @@ class ChatApp(App):
     async def _send_message(self, text: str) -> None:
         self._add_user_message(text)
 
-        msg_idx = len(self.messages)
-        self.messages.append({"role": "assistant", "content": ""})
-        container = self._get_chat_container()
-        container.add_message("assistant", "")
-        self._update_streaming_thinking("Thinking...")
+        msg_idx = self._start_assistant_message()
 
         self._streaming_active = True
 
         self._streaming_task = asyncio.create_task(self._stream_response(msg_idx))
+
+    def _handle_command(self, text: str) -> bool:
+        command = self.command_handler.parse(text)
+        if not command:
+            return False
+
+        result = self.command_handler.execute(command)
+        if result == "quit":
+            self.exit()
+            return True
+        if result:
+            self._add_system_message(result)
+        return True
+
+    def _start_assistant_message(self) -> int:
+        msg_idx = len(self.messages)
+        self.messages.append({"role": "assistant", "content": ""})
+        container = self._get_chat_container()
+        container.add_message("assistant", "")
+        self._update_streaming_thinking(THINKING_PLACEHOLDER)
+        return msg_idx
 
     async def _stream_response(self, msg_idx: int) -> None:
         got_output = False
@@ -150,36 +155,61 @@ class ChatApp(App):
                 self.messages,
                 streaming_enabled=streaming_enabled,
             ):
-                if content:
-                    got_output = True
-                    self.messages[msg_idx]["content"] += content
-                    self._update_streaming_response(content)
-                if thinking:
-                    got_output = True
-                    existing = self.messages[msg_idx].get("reasoning_content", "")
-                    self.messages[msg_idx]["reasoning_content"] = existing + thinking
-                    self._update_streaming_thinking(thinking)
+                got_output = self._handle_stream_chunk(
+                    msg_idx,
+                    content,
+                    thinking,
+                    got_output,
+                )
         except asyncio.CancelledError:
-            if self.messages[msg_idx].get("content", "") == "":
-                self.messages[msg_idx]["content"] = "Generation cancelled."
-                container = self._get_chat_container()
-                view = container.last_assistant_view()
-                if view:
-                    view.thinking = ""
-                    view.content = "Generation cancelled."
+            self._handle_cancelled_stream(msg_idx)
             raise
         except Exception as e:
             self._update_streaming_response(f"\nError: {e}")
         finally:
-            if not got_output and not self.messages[msg_idx].get("content"):
-                fallback = "No response returned by model."
-                self.messages[msg_idx]["content"] = fallback
-                container = self._get_chat_container()
-                view = container.last_assistant_view()
-                if view:
-                    view.thinking = ""
-                    view.content = fallback
+            self._finalize_stream_state(msg_idx, got_output)
             self._streaming_active = False
+
+    def _handle_stream_chunk(
+        self,
+        msg_idx: int,
+        content: str,
+        thinking: str,
+        got_output: bool,
+    ) -> bool:
+        if content:
+            got_output = True
+            self.messages[msg_idx]["content"] += content
+            self._update_streaming_response(content)
+
+        if thinking:
+            got_output = True
+            existing = self.messages[msg_idx].get("reasoning_content", "")
+            self.messages[msg_idx]["reasoning_content"] = existing + thinking
+            self._update_streaming_thinking(thinking)
+
+        return got_output
+
+    def _handle_cancelled_stream(self, msg_idx: int) -> None:
+        if self.messages[msg_idx].get("content", "") != "":
+            return
+        fallback = "Generation cancelled."
+        self.messages[msg_idx]["content"] = fallback
+        self._replace_last_assistant_view(fallback)
+
+    def _finalize_stream_state(self, msg_idx: int, got_output: bool) -> None:
+        if got_output or self.messages[msg_idx].get("content"):
+            return
+        fallback = "No response returned by model."
+        self.messages[msg_idx]["content"] = fallback
+        self._replace_last_assistant_view(fallback)
+
+    def _replace_last_assistant_view(self, content: str) -> None:
+        container = self._get_chat_container()
+        view = container.last_assistant_view()
+        if view:
+            view.thinking = ""
+            view.content = content
 
     def _add_message(self, role: str, content: str) -> None:
         self.messages.append({"role": role, "content": content})
@@ -199,7 +229,7 @@ class ChatApp(App):
         container = self._get_chat_container()
         view = container.last_assistant_view()
         if view:
-            if view.thinking == "Thinking...":
+            if view.thinking == THINKING_PLACEHOLDER:
                 view.thinking = ""
             view.append_content(new_content)
 
@@ -207,52 +237,34 @@ class ChatApp(App):
         container = self._get_chat_container()
         view = container.last_assistant_view()
         if view:
-            if view.thinking == "Thinking...":
+            if view.thinking == THINKING_PLACEHOLDER:
                 view.thinking = new_thinking
             else:
                 view.append_thinking(new_thinking)
 
     def _show_config(self) -> None:
-        self.services["config"].show()
-
-    def _mcp_add(self, name: str, url: str) -> str:
-        return self.services["mcp"].add(name, url)
-
-    def _mcp_list(self) -> dict[str, str]:
-        return self.services["mcp"].list()
-
-    def _mcp_remove(self, name: str) -> str:
-        return self.services["mcp"].remove(name)
+        self.config_service.show()
 
     def _list_mcp_servers(self) -> dict[str, str]:
-        return self._mcp_list()
+        return self.mcp_service.list()
 
     def _add_mcp_server(self, name: str, url: str) -> str:
-        return self._mcp_add(name, url)
+        return self.mcp_service.add(name, url)
 
     def _remove_mcp_server(self, name: str) -> str:
-        return self._mcp_remove(name)
-
-    def _sessions_list(self) -> list[dict[str, Any]]:
-        return self.services["history"].list()
-
-    def _sessions_load(self, name: str) -> str:
-        return self.services["history"].load(name)
-
-    def _sessions_delete(self, name: str) -> str:
-        return self.services["history"].delete(name)
+        return self.mcp_service.remove(name)
 
     def _list_sessions(self) -> list[dict[str, Any]]:
-        return self._sessions_list()
+        return self.history_service.list()
 
     def _load_session(self, name: str) -> str:
-        return self._sessions_load(name)
+        return self.history_service.load(name)
 
     def _delete_session(self, name: str) -> str:
-        return self._sessions_delete(name)
+        return self.history_service.delete(name)
 
     def _new_conversation(self) -> None:
-        self.services["history"].start_new()
+        self.history_service.start_new()
 
     def _streaming_command(self, args: list[str]) -> str:
         current = bool(self.config_manager.get("streaming", True))
@@ -262,24 +274,24 @@ class ChatApp(App):
 
         action = args[0].lower()
         if action == "on":
-            self.config_manager.set("streaming", True)
-            self.config_manager.save()
+            self._set_streaming(True)
             return "Streaming enabled."
         if action == "off":
-            self.config_manager.set("streaming", False)
-            self.config_manager.save()
+            self._set_streaming(False)
             return "Streaming disabled."
         if action == "toggle":
             next_value = not current
-            self.config_manager.set("streaming", next_value)
-            self.config_manager.save()
+            self._set_streaming(next_value)
             return f"Streaming {'enabled' if next_value else 'disabled'}."
 
         return "Usage: /streaming [on|off|toggle|status]"
 
+    def _set_streaming(self, enabled: bool) -> None:
+        self.config_manager.set("streaming", enabled)
+        self.config_manager.save()
+
     def _request_quit(self) -> None:
-        self.services["history"].save_current()
-        self._quit_requested = True
+        self.history_service.save_current()
 
     def action_cancel_stream(self) -> None:
         if self._streaming_task and not self._streaming_task.done():

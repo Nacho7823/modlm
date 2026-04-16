@@ -33,44 +33,45 @@ class MCPClientBase(ABC):
         pass
 
     @abstractmethod
-    async def _close_transport(self, transport: Any) -> None:
-        """Close a specific transport."""
+    async def _close_transport(self) -> None:
+        """Close the underlying transport."""
         pass
 
     async def connect(self, connect_timeout: int = DEFAULT_CONNECT_TIMEOUT) -> bool:
         """Establish connection to the MCP server."""
         try:
             read_stream, write_stream = await self._create_transport()
-
-            self._client_session = ClientSession(read_stream, write_stream)
-            await self._client_session.__aenter__()
-
-            await asyncio.wait_for(
-                self._client_session.initialize(), timeout=connect_timeout
-            )
+            await self._open_session(read_stream, write_stream, connect_timeout)
             self._connected = True
             logger.info(f"Connected to MCP server: {self.name}")
             return True
         except asyncio.TimeoutError:
-            logger.error(f"Timeout connecting to {self.name} after {connect_timeout}s")
+            message = f"Timeout connecting to {self.name} after {connect_timeout}s"
+            logger.error(message)
             await self._cleanup()
-            raise MCPConnectionError(
-                f"Timeout connecting to {self.name} after {connect_timeout}s"
-            )
+            raise MCPConnectionError(message)
         except Exception as e:
             logger.error(f"Failed to connect to {self.name}: {e}")
             await self._cleanup()
             raise MCPConnectionError(f"Failed to connect to {self.name}: {e}") from e
 
+    async def _open_session(
+        self,
+        read_stream: Any,
+        write_stream: Any,
+        connect_timeout: int,
+    ) -> None:
+        self._client_session = ClientSession(read_stream, write_stream)
+        await self._client_session.__aenter__()
+        await asyncio.wait_for(
+            self._client_session.initialize(), timeout=connect_timeout
+        )
+
     async def _cleanup(self) -> None:
         """Clean up resources on error."""
         try:
-            if self._client_session:
-                try:
-                    await self._client_session.__aexit__(None, None, None)
-                except Exception:
-                    pass
-                self._client_session = None
+            await self._close_session()
+            await self._close_transport()
         except Exception as e:
             logger.warning(f"Error during session cleanup: {e}")
         finally:
@@ -79,13 +80,22 @@ class MCPClientBase(ABC):
     async def disconnect(self) -> None:
         """Disconnect from the MCP server."""
         try:
-            if self._client_session:
-                await self._client_session.__aexit__(None, None, None)
-                self._client_session = None
+            await self._close_session()
+            await self._close_transport()
         except Exception as e:
             logger.warning(f"Error disconnecting from {self.name}: {e}")
         finally:
             self._connected = False
+
+    async def _close_session(self) -> None:
+        if not self._client_session:
+            return
+        try:
+            await self._client_session.__aexit__(None, None, None)
+        except Exception:
+            pass
+        finally:
+            self._client_session = None
 
     async def test_connection(self) -> dict[str, Any]:
         """Test the connection and return status."""
@@ -123,19 +133,11 @@ class MCPClientBase(ABC):
 
         tools = []
         for tool in result.tools:
-            input_schema = {}
-            if hasattr(tool, "inputSchema"):
-                input_schema = tool.inputSchema
-            elif hasattr(tool, "input_schema"):
-                input_schema = tool.input_schema
-            elif hasattr(tool, "parameters"):
-                input_schema = tool.parameters
-
             tools.append(
                 ToolSchema(
                     name=tool.name,
                     description=tool.description or "",
-                    input_schema=input_schema,
+                    input_schema=self._extract_input_schema(tool),
                 )
             )
 
@@ -150,15 +152,20 @@ class MCPClientBase(ABC):
 
         try:
             result = await self._client_session.call_tool(tool_name, arguments)
-
-            is_error = False
-            if hasattr(result, "isError"):
-                is_error = result.isError
-
+            is_error = bool(getattr(result, "isError", False))
             return MCPToolResult(content=result.content or [], is_error=is_error)
         except Exception as e:
             logger.error(f"Tool call failed: {e}")
             return MCPToolResult(content=[str(e)], is_error=True)
+
+    def _extract_input_schema(self, tool: Any) -> dict[str, Any]:
+        if hasattr(tool, "inputSchema"):
+            return tool.inputSchema
+        if hasattr(tool, "input_schema"):
+            return tool.input_schema
+        if hasattr(tool, "parameters"):
+            return tool.parameters
+        return {}
 
     async def __aenter__(self) -> "MCPClientBase":
         await self.connect()
@@ -197,7 +204,7 @@ class LocalMCPClient(MCPClientBase):
         logger.info(f"Stdio transport ready for {self.name}")
         return read, write
 
-    async def _close_transport(self, transport: Any) -> None:
+    async def _close_transport(self) -> None:
         """Close stdio transport."""
         if self._stdio_context:
             await self._stdio_context.__aexit__(None, None, None)
@@ -233,7 +240,7 @@ class HTTPMCPClient(MCPClientBase):
         logger.info(f"HTTP transport ready for {self.name}")
         return read, write
 
-    async def _close_transport(self, transport: Any) -> None:
+    async def _close_transport(self) -> None:
         """Close HTTP transport."""
         if self._http_context:
             await self._http_context.__aexit__(None, None, None)

@@ -15,11 +15,9 @@ class ConfigService:
 
     def init_clients(self) -> None:
         """Initialize LLM clients from config."""
-        from llmlib.llm import OpenAI
-
         api_url, api_key, model = self._app.config_manager.get_api_config()
-        self._app.client = OpenAI(base_url=api_url, api_key=api_key, model=model)
-        self._app.client_async = OpenAI(base_url=api_url, api_key=api_key, model=model)
+        self._app.client = self._create_client(api_url, api_key, model)
+        self._app.client_async = self._create_client(api_url, api_key, model)
         self._init_mcp_clients()
 
     def _create_client(self, api_url: str, api_key: str, model: str) -> "OpenAI":

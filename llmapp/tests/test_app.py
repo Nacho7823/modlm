@@ -1,7 +1,6 @@
 """Tests for llmapp using Textual native testing."""
 
 import pytest
-from textual.app import App
 from llmapp.config import ConfigManager
 from llmapp.history import ConversationManager
 from llmapp.command import CommandHandler, Command
@@ -90,44 +89,26 @@ class TestConversationManager:
 class TestCommandHandler:
     """Tests for CommandHandler."""
 
-    def test_parse_config(self):
-        handler = CommandHandler()
-        cmd = handler.parse("/config")
+    @pytest.mark.parametrize(
+        ("text", "name", "args"),
+        [
+            ("/config", "config", []),
+            (
+                "/mcp add myserver http://localhost:8080",
+                "mcp",
+                ["add", "myserver", "http://localhost:8080"],
+            ),
+            ("/session load myconv", "session", ["load", "myconv"]),
+            ("/new", "new", []),
+            ("/quit", "quit", []),
+            ("/q", "q", []),
+        ],
+    )
+    def test_parse_command(self, text, name, args):
+        cmd = CommandHandler().parse(text)
         assert cmd is not None
-        assert cmd.name == "config"
-        assert cmd.args == []
-
-    def test_parse_mcp_add(self):
-        handler = CommandHandler()
-        cmd = handler.parse("/mcp add myserver http://localhost:8080")
-        assert cmd is not None
-        assert cmd.name == "mcp"
-        assert cmd.args == ["add", "myserver", "http://localhost:8080"]
-
-    def test_parse_session_load(self):
-        handler = CommandHandler()
-        cmd = handler.parse("/session load myconv")
-        assert cmd is not None
-        assert cmd.name == "session"
-        assert cmd.args == ["load", "myconv"]
-
-    def test_parse_new(self):
-        handler = CommandHandler()
-        cmd = handler.parse("/new")
-        assert cmd is not None
-        assert cmd.name == "new"
-
-    def test_parse_quit(self):
-        handler = CommandHandler()
-        cmd = handler.parse("/quit")
-        assert cmd is not None
-        assert cmd.name == "quit"
-
-    def test_parse_q(self):
-        handler = CommandHandler()
-        cmd = handler.parse("/q")
-        assert cmd is not None
-        assert cmd.name == "q"
+        assert cmd.name == name
+        assert cmd.args == args
 
     def test_parse_not_command(self):
         handler = CommandHandler()
@@ -148,22 +129,14 @@ class TestCommandHandler:
 class TestChatAppIntegration:
     """Integration tests for ChatApp using Textual headless mode."""
 
-    def test_app_initialization(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.config_manager = ConfigManager(tmp_path)
-        app.config_manager.load()
-        app.history_manager = ConversationManager(tmp_path)
+    def test_app_initialization(self, chat_app):
+        app = chat_app
         assert app.config_manager is not None
         assert app.history_manager is not None
         assert app.messages == []
 
-    def test_new_conversation_logic(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.history_manager = ConversationManager(tmp_path)
+    def test_new_conversation_logic(self, chat_app):
+        app = chat_app
         app.messages = [{"role": "user", "content": "test"}]
         app.current_session = "test_session"
         app.messages = []
@@ -171,30 +144,20 @@ class TestChatAppIntegration:
         assert app.messages == []
         assert app.current_session is None
 
-    def test_list_sessions_empty(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.history_manager = ConversationManager(tmp_path)
+    def test_list_sessions_empty(self, chat_app):
+        app = chat_app
         sessions = app._list_sessions()
         assert sessions == []
 
-    def test_list_sessions_with_data(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.history_manager = ConversationManager(tmp_path)
+    def test_list_sessions_with_data(self, chat_app):
+        app = chat_app
         app.history_manager.save("test", [{"role": "user", "content": "hi"}])
         sessions = app._list_sessions()
         assert len(sessions) == 1
         assert sessions[0]["name"] == "test"
 
-    def test_add_mcp_server_handler(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.config_manager = ConfigManager(tmp_path)
-        app.config_manager.load()
+    def test_add_mcp_server_handler(self, chat_app):
+        app = chat_app
         result = app._add_mcp_server("test_server", "http://localhost:8080")
         assert "test_server" in result
         assert "test_server" in app.config_manager.get_mcp_servers()
@@ -203,50 +166,32 @@ class TestChatAppIntegration:
             == "http://localhost:8080"
         )
 
-    def test_remove_mcp_server_handler(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.config_manager = ConfigManager(tmp_path)
-        app.config_manager.load()
+    def test_remove_mcp_server_handler(self, chat_app):
+        app = chat_app
         app._add_mcp_server("to_remove", "http://localhost:8080")
         result = app._remove_mcp_server("to_remove")
         assert "removed" in result
         assert "to_remove" not in app.config_manager.get_mcp_servers()
 
-    def test_show_config_returns_config(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.config_manager = ConfigManager(tmp_path)
-        app.config_manager.load()
+    def test_show_config_returns_config(self, chat_app):
+        app = chat_app
         api_url, api_key, model = app.config_manager.get_api_config()
         assert api_url == "http://127.0.0.1:1234/v1"
         assert model == "qwen3.5-4b"
 
-    def test_command_handler_mcp_list(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.config_manager = ConfigManager(tmp_path)
-        app.config_manager.load()
+    def test_command_handler_mcp_list(self, chat_app):
+        app = chat_app
         app._add_mcp_server("server1", "http://localhost:8080")
         servers = app._list_mcp_servers()
         assert "server1" in servers
 
-    def test_load_session_not_found(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.history_manager = ConversationManager(tmp_path)
+    def test_load_session_not_found(self, chat_app):
+        app = chat_app
         result = app._load_session("nonexistent")
         assert "not found" in result
 
-    def test_delete_session_not_found(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.history_manager = ConversationManager(tmp_path)
+    def test_delete_session_not_found(self, chat_app):
+        app = chat_app
         result = app._delete_session("nonexistent")
         assert "not found" in result
 

@@ -173,39 +173,26 @@ class TestChatInput:
 class TestCommandExecutionWithHandlers:
     """Tests for command execution with actual handlers."""
 
-    def test_mcp_list_handler_returns_dict(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.config_manager = ConfigManager(tmp_path)
-        app.config_manager.load()
+    def test_mcp_list_handler_returns_dict(self, chat_app):
+        app = chat_app
         result = app._list_mcp_servers()
         assert isinstance(result, dict)
 
-    def test_session_list_handler_returns_list(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.history_manager = ConversationManager(tmp_path)
+    def test_session_list_handler_returns_list(self, chat_app):
+        app = chat_app
         result = app._list_sessions()
         assert isinstance(result, list)
 
-    def test_load_and_save_session(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.history_manager = ConversationManager(tmp_path)
+    def test_load_and_save_session(self, chat_app):
+        app = chat_app
         app.messages = [{"role": "user", "content": "test"}]
         app.history_manager.save("test_session", app.messages)
         loaded = app.history_manager.load("test_session")
         assert len(loaded) == 1
         assert loaded[0]["content"] == "test"
 
-    def test_delete_and_verify(self, tmp_path):
-        from llmapp.app import ChatApp
-
-        app = ChatApp()
-        app.history_manager = ConversationManager(tmp_path)
+    def test_delete_and_verify(self, chat_app):
+        app = chat_app
         app.history_manager.save("to_delete", [{"role": "user", "content": "test"}])
         app._delete_session("to_delete")
         assert app.history_manager.load("to_delete") is None
