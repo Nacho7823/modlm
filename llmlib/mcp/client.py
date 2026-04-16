@@ -11,12 +11,12 @@ import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from .models import MCPToolError, MCPConnectionError, ToolSchema, MCPToolResult
+from llmlib.models import MCPToolError, MCPConnectionError, Tool, ToolResult
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 30
-DEFAULT_CONNECT_TIMEOUT = 10
+DEFAULT_CONNECT_TIMEOUT = 30
 
 
 class MCPClientBase(ABC):
@@ -93,8 +93,13 @@ class MCPClientBase(ABC):
             return
         try:
             await self._client_session.__aexit__(None, None, None)
-        except Exception:
-            pass
+        except RuntimeError as e:
+            if "cancel scope" in str(e):
+                logger.debug(f"Task mismatch during _close_session for {self.name} (ignoring anyio error)")
+            else:
+                logger.warning(f"Error closing session for {self.name}: {e}")
+        except Exception as e:
+            logger.warning(f"Error closing session for {self.name}: {e}")
         finally:
             self._client_session = None
 
@@ -117,56 +122,45 @@ class MCPClientBase(ABC):
     def is_connected(self) -> bool:
         return self._connected
 
-    async def list_tools(self) -> list[ToolSchema]:
+    async def list_tools(self) -> list[Tool]:
         """List available tools from the server."""
-        if not self._connected:
-            raise MCPConnectionError(f"Not connected to MCP server: {self.name}")
-        if not self._client_session:
-            raise MCPConnectionError(f"No session for MCP server: {self.name}")
-
-        logger.info(f"Listing tools from {self.name}...")
-
         try:
+            if not self._connected:
+                await self.connect()
+            if not self._client_session:
+                raise MCPConnectionError(f"No active session for {self.name}")
+                
             result = await self._client_session.list_tools()
+        except (MCPConnectionError, MCPToolError):
+            raise
         except Exception as e:
             logger.error(f"list_tools failed for {self.name}: {e}")
             raise MCPToolError(f"Failed to list tools: {e}") from e
 
         tools = []
         for tool in result.tools:
-            tools.append(
-                ToolSchema(
-                    name=tool.name,
-                    description=tool.description or "",
-                    input_schema=self._extract_input_schema(tool),
-                )
-            )
-
+            tools.append(Tool.from_mcp_raw(self.name, tool))
         return tools
 
     async def call_tool(
         self, tool_name: str, arguments: dict[str, Any]
-    ) -> MCPToolResult:
+    ) -> ToolResult:
         """Call a tool on the server."""
-        if not self._connected or not self._client_session:
-            raise MCPConnectionError("Not connected to MCP server")
-
         try:
+            if not self._connected:
+                await self.connect()
+            if not self._client_session:
+                raise MCPConnectionError(f"No active session for {self.name}")
+                
             result = await self._client_session.call_tool(tool_name, arguments)
             is_error = bool(getattr(result, "isError", False))
-            return MCPToolResult(content=result.content or [], is_error=is_error)
+            return ToolResult(tool_call_id="", content=result.content or [], is_error=is_error)
+        except (MCPConnectionError, MCPToolError):
+            raise
         except Exception as e:
             logger.error(f"Tool call failed: {e}")
-            return MCPToolResult(content=[str(e)], is_error=True)
+            return ToolResult(tool_call_id="", content=[str(e)], is_error=True)
 
-    def _extract_input_schema(self, tool: Any) -> dict[str, Any]:
-        if hasattr(tool, "inputSchema"):
-            return tool.inputSchema
-        if hasattr(tool, "input_schema"):
-            return tool.input_schema
-        if hasattr(tool, "parameters"):
-            return tool.parameters
-        return {}
 
     async def __aenter__(self) -> "MCPClientBase":
         await self.connect()
@@ -208,7 +202,15 @@ class LocalMCPClient(MCPClientBase):
     async def _close_transport(self) -> None:
         """Close stdio transport."""
         if self._stdio_context:
-            await self._stdio_context.__aexit__(None, None, None)
+            try:
+                await self._stdio_context.__aexit__(None, None, None)
+            except RuntimeError as e:
+                if "cancel scope" in str(e):
+                    logger.debug(f"Task mismatch during _close_transport for {self.name} (ignoring anyio error)")
+                else:
+                    logger.warning(f"Error closing transport for {self.name}: {e}")
+            except Exception as e:
+                logger.warning(f"Error closing transport for {self.name}: {e}")
             self._stdio_context = None
 
 
@@ -247,7 +249,15 @@ class HTTPMCPClient(MCPClientBase):
     async def _close_transport(self) -> None:
         """Close HTTP transport."""
         if self._http_context:
-            await self._http_context.__aexit__(None, None, None)
+            try:
+                await self._http_context.__aexit__(None, None, None)
+            except RuntimeError as e:
+                if "cancel scope" in str(e):
+                    logger.debug(f"Task mismatch during _close_transport for {self.name} (ignoring anyio error)")
+                else:
+                    logger.warning(f"Error closing transport for {self.name}: {e}")
+            except Exception as e:
+                logger.warning(f"Error closing transport for {self.name}: {e}")
             self._http_context = None
         if self._http_client:
             await self._http_client.aclose()

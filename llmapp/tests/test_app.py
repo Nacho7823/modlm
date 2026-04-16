@@ -3,9 +3,11 @@
 import asyncio
 
 import pytest
+from unittest.mock import AsyncMock, patch
 from llmapp.config import ConfigManager
 from llmapp.history import ConversationManager
 from llmapp.command import CommandHandler, Command
+from llmlib.models import MCPServerConfig
 
 
 class TestConfigManager:
@@ -22,7 +24,8 @@ class TestConfigManager:
         manager = ConfigManager(tmp_path)
         manager.load()
         manager.set("api_url", "http://localhost:8080/v1")
-        manager.add_mcp_server("test", "http://localhost:3000")
+        cfg = MCPServerConfig(name="test", server_type="remote", url="http://localhost:3000")
+        manager.add_mcp_server(cfg)
         manager.save()
 
         manager2 = ConfigManager(tmp_path)
@@ -40,14 +43,16 @@ class TestConfigManager:
     def test_add_mcp_server(self, tmp_path):
         manager = ConfigManager(tmp_path)
         manager.load()
-        manager.add_mcp_server("myServer", "http://localhost:8080/mcp")
+        cfg = MCPServerConfig(name="myServer", server_type="remote", url="http://localhost:8080/mcp")
+        manager.add_mcp_server(cfg)
         servers = manager.get_mcp_servers()
-        assert servers["myServer"] == "http://localhost:8080/mcp"
+        assert servers["myServer"].url == "http://localhost:8080/mcp"
 
     def test_remove_mcp_server(self, tmp_path):
         manager = ConfigManager(tmp_path)
         manager.load()
-        manager.add_mcp_server("toRemove", "http://localhost:8080")
+        cfg = MCPServerConfig(name="toRemove", server_type="remote", url="http://localhost:8080")
+        manager.add_mcp_server(cfg)
         assert manager.remove_mcp_server("toRemove")
         assert "toRemove" not in manager.get_mcp_servers()
 
@@ -96,9 +101,9 @@ class TestCommandHandler:
         [
             ("/config", "config", []),
             (
-                "/mcp add myserver http://localhost:8080",
+                "/mcp add",
                 "mcp",
-                ["add", "myserver", "http://localhost:8080"],
+                ["add"],
             ),
             ("/session load myconv", "session", ["load", "myconv"]),
             ("/new", "new", []),
@@ -121,9 +126,10 @@ class TestCommandHandler:
         result = CommandHandler.help_text()
         assert "Available commands:" in result
 
-    def test_execute_unknown(self, chat_app):
+    @pytest.mark.asyncio
+    async def test_execute_unknown(self, chat_app):
         app = chat_app
-        result = app.command_controller.execute(
+        result = await app.command_controller.execute(
             Command(name="unknown", args=[], raw="/unknown")
         )
         assert "Unknown command" in result
@@ -159,24 +165,32 @@ class TestChatAppIntegration:
         assert len(sessions) == 1
         assert sessions[0]["name"] == "test"
 
-    def test_add_mcp_server_handler(self, chat_app):
+    @pytest.mark.asyncio
+    async def test_add_mcp_server_handler(self, chat_app):
         app = chat_app
-        result = app.runtime_controller.add_mcp_server(
-            "test_server", "http://localhost:8080"
-        )
+        cfg = MCPServerConfig(name="test_server", server_type="remote", url="http://localhost:8080")
+        
+        with patch("llmlib.mcp.registry.MCPRegistry._validate", AsyncMock(return_value=[])):
+            result = await app.runtime_controller.add_mcp_server(cfg)
+        
         assert "test_server" in result
         assert "test_server" in app.config_manager.get_mcp_servers()
         assert (
-            app.config_manager.get_mcp_servers()["test_server"]
+            app.config_manager.get_mcp_servers()["test_server"].url
             == "http://localhost:8080"
         )
 
-    def test_remove_mcp_server_handler(self, chat_app):
+    @pytest.mark.asyncio
+    async def test_remove_mcp_server_handler(self, chat_app):
         app = chat_app
-        app.runtime_controller.add_mcp_server("to_remove", "http://localhost:8080")
-        result = app.runtime_controller.remove_mcp_server("to_remove")
+        cfg = MCPServerConfig(name="to_remove", server_type="remote", url="http://localhost:8080")
+        
+        with patch("llmlib.mcp.registry.MCPRegistry._validate", AsyncMock(return_value=[])):
+            await app.runtime_controller.add_mcp_server(cfg)
+            
+        result = await app.runtime_controller.remove_mcp_server("to_remove")
         assert "removed" in result
-        assert "to_remove" not in app.config_manager.get_mcp_servers()
+        assert "to_remove" not in app.runtime.list_mcp_servers()
 
     def test_show_config_returns_config(self, chat_app):
         app = chat_app
@@ -184,9 +198,14 @@ class TestChatAppIntegration:
         assert api_url == "http://127.0.0.1:1234/v1"
         assert model == "qwen3.5-4b"
 
-    def test_command_handler_mcp_list(self, chat_app):
+    @pytest.mark.asyncio
+    async def test_command_handler_mcp_list(self, chat_app):
         app = chat_app
-        app.runtime_controller.add_mcp_server("server1", "http://localhost:8080")
+        cfg = MCPServerConfig(name="server1", server_type="remote", url="http://localhost:8080")
+        
+        with patch("llmlib.mcp.registry.MCPRegistry._validate", AsyncMock(return_value=[])):
+            await app.runtime_controller.add_mcp_server(cfg)
+            
         servers = app.runtime_controller.list_mcp_servers()
         assert "server1" in servers
 

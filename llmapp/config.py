@@ -7,6 +7,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from llmlib.models import MCPServerConfig
+
 
 def _get_default_config() -> dict[str, Any]:
     """Load default config from environment variables."""
@@ -32,65 +34,61 @@ class ConfigManager:
         self.config_dir = config_dir
         self.config_file = config_dir / "config.json"
         self._config: dict[str, Any] = {}
+        self._mcp_servers: dict[str, MCPServerConfig] = {}
 
     def load(self) -> dict[str, Any]:
         env_path = self.config_dir.parent / ".env"
         load_dotenv(env_path, verbose=True)
-
         self._config = dict(self.DEFAULT_CONFIG)
-
         self._load_from_env()
         self._load_from_file()
-
+        self._config["mcp_servers"] = self._mcp_servers
         return self._config
 
     def _load_from_env(self) -> None:
-        self._config["api_url"] = self._load_env("LLM_API_URL", self._config["api_url"])
-        self._config["api_key"] = self._load_env("LLM_API_KEY", "")
-        self._config["model"] = self._load_env("LLM_MODEL", self._config["model"])
-        self._config["streaming"] = self._load_env_bool(
+        self._config["api_url"] = self._read_env("LLM_API_URL", self._config["api_url"])
+        self._config["api_key"] = self._read_env("LLM_API_KEY", "")
+        self._config["model"] = self._read_env("LLM_MODEL", self._config["model"])
+        self._config["streaming"] = self._read_env_bool(
             "LLM_STREAMING", self._config["streaming"]
         )
 
     def _load_from_file(self) -> None:
         if not self.config_file.exists():
             return
-
-        with open(self.config_file, "r", encoding="utf-8") as file_handle:
-            file_config = json.load(file_handle)
-
-        self._merge_non_api_keys(file_config)
+        with open(self.config_file, "r", encoding="utf-8") as fh:
+            file_config = json.load(fh)
+        self._merge_scalar_keys(file_config)
         self._override_api_keys(file_config)
+        self._mcp_servers = self._parse_mcp_servers(file_config.get("mcp_servers", {}))
+        self._config["mcp_servers"] = self._mcp_servers
 
-    def _merge_non_api_keys(self, file_config: dict[str, Any]) -> None:
+    def _merge_scalar_keys(self, file_config: dict[str, Any]) -> None:
         for key, value in file_config.items():
-            if key == "mcp_servers":
-                self._config["mcp_servers"] = value
-            elif key not in ("api_url", "api_key", "model"):
+            if key not in ("api_url", "api_key", "model", "mcp_servers"):
                 self._config[key] = value
 
     def _override_api_keys(self, file_config: dict[str, Any]) -> None:
-        if "api_url" in file_config:
-            self._config["api_url"] = file_config["api_url"]
-        if "api_key" in file_config:
-            self._config["api_key"] = file_config["api_key"]
-        if "model" in file_config:
-            self._config["model"] = file_config["model"]
+        for key in ("api_url", "api_key", "model"):
+            if key in file_config:
+                self._config[key] = file_config[key]
         if "streaming" in file_config:
             self._config["streaming"] = bool(file_config["streaming"])
 
-    def _load_env(self, key: str, default: str) -> str:
-        return os.environ.get(key, default)
-
-    def _load_env_bool(self, key: str, default: bool) -> bool:
-        raw = os.environ.get(key)
-        if raw is None:
-            return default
-        return raw.lower() in ("1", "true", "yes", "on")
+    def _parse_mcp_servers(self, raw: dict[str, Any]) -> dict[str, MCPServerConfig]:
+        """Parse MCP servers dict, auto-migrating legacy str url values."""
+        return {
+            name: MCPServerConfig.from_dict(name, data)
+            for name, data in raw.items()
+        }
 
     def save(self) -> None:
-        with open(self.config_file, "w", encoding="utf-8") as file_handle:
-            json.dump(self._config, file_handle, indent=2)
+        serializable = dict(self._config)
+        serializable["mcp_servers"] = {
+            name: cfg.to_dict() for name, cfg in self._mcp_servers.items()
+        }
+        with open(self.config_file, "w", encoding="utf-8") as fh:
+            json.dump(serializable, fh, indent=2)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self._config.get(key, default)
@@ -105,20 +103,25 @@ class ConfigManager:
             self._config.get("model", ""),
         )
 
-    def get_mcp_servers(self) -> dict[str, str]:
-        return self._config.get("mcp_servers", {})
+    def get_mcp_servers(self) -> dict[str, MCPServerConfig]:
+        return dict(self._mcp_servers)
 
-    def add_mcp_server(self, name: str, url: str) -> None:
-        mcp_servers = self._config.get("mcp_servers", {})
-        mcp_servers[name] = url
-        self._config["mcp_servers"] = mcp_servers
+    def add_mcp_server(self, config: MCPServerConfig) -> None:
+        self._mcp_servers[config.name] = config
         self.save()
 
     def remove_mcp_server(self, name: str) -> bool:
-        mcp_servers = self._config.get("mcp_servers", {})
-        if name in mcp_servers:
-            del mcp_servers[name]
-            self._config["mcp_servers"] = mcp_servers
-            self.save()
-            return True
-        return False
+        if name not in self._mcp_servers:
+            return False
+        del self._mcp_servers[name]
+        self.save()
+        return True
+
+    def _read_env(self, key: str, default: str) -> str:
+        return os.environ.get(key, default)
+
+    def _read_env_bool(self, key: str, default: bool) -> bool:
+        raw = os.environ.get(key)
+        if raw is None:
+            return default
+        return raw.lower() in ("1", "true", "yes", "on")

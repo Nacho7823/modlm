@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from .client import HTTPMCPClient, MCPClientBase, LocalMCPClient, RemoteMCPClient
-from .models import MCPConnectionError
+from .client import HTTPMCPClient, LocalMCPClient, MCPClientBase, RemoteMCPClient
+from llmlib.models import MCPServerConfig, MCPConnectionError
 
 logger = logging.getLogger(__name__)
 

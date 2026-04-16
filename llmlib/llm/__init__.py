@@ -8,8 +8,10 @@ from .client import (
     AsyncCompletions,
     StreamCompletions,
 )
-from .models import ChatCompletion, Choice, Message
-from .tools import Tool, ToolCall, ToolResult, ToolExecutor
+from llmlib.models import ChatCompletion, Choice, Message, Tool, ToolCall, ToolResult
+from .tools import ToolExecutor
+from .orchestrator import ChatOrchestrator
+from .runtime import LLMRuntime
 
 __all__ = [
     "OpenAI",
@@ -25,4 +27,6 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "ToolExecutor",
+    "ChatOrchestrator",
+    "LLMRuntime",
 ]

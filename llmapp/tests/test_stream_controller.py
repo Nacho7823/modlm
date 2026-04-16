@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from llmlib.runtime import StreamEvent
+from llmlib import StreamEvent
 
 from llmapp.controllers.stream_controller import StreamController
 

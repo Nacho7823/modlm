@@ -7,12 +7,24 @@ from .client import (
     RemoteMCPClient,
 )
 from .factory import create_mcp_client, create_mcp_client_from_config
-from .models import (
+from .executor import ToolExecutor
+from .registry import MCPRegistry
+from llmlib.models import (
+    ChatCompletion,
+    Choice,
+    Message,
+    Tool,
+    ToolCall,
+    ToolResult,
+    MCPError,
     MCPConnectionError,
     MCPToolError,
-    MCPToolResult,
-    ToolSchema,
+    MCPServerConfig,
 )
+
+# Legacy aliases for backward compatibility in tests
+ToolSchema = Tool
+MCPToolResult = ToolResult
 
 __all__ = [
     "MCPClientBase",
@@ -23,6 +35,16 @@ __all__ = [
     "MCPToolResult",
     "MCPConnectionError",
     "MCPToolError",
+    "MCPError",
     "create_mcp_client",
     "create_mcp_client_from_config",
+    "ChatCompletion",
+    "Choice",
+    "Message",
+    "Tool",
+    "ToolCall",
+    "ToolResult",
+    "ToolExecutor",
+    "MCPRegistry",
+    "MCPServerConfig",
 ]

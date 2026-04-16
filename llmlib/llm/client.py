@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Sequence
 
 import httpx
 
-from .models import ChatCompletion, Choice, Message
-from .tools import Tool
+from llmlib.models import ChatCompletion, Choice, Message, Tool
 
 if TYPE_CHECKING:
     import asyncio
@@ -182,7 +181,7 @@ class Completions:
         response.raise_for_status()
         data = response.json()
 
-        return _parse_completion(data, final_model)
+        return ChatCompletion.from_raw(data)
 
 
 class StreamCompletions:
@@ -265,7 +264,7 @@ class AsyncCompletions:
         )
         response.raise_for_status()
         data = response.json()
-        return _parse_completion(data, model)
+        return ChatCompletion.from_raw(data)
 
     async def _stream_response(
         self, payload: dict[str, Any]
@@ -361,46 +360,3 @@ def _build_payload(
     return payload
 
 
-def _parse_completion(data: dict[str, Any], model: str) -> ChatCompletion:
-    choices = _parse_choices(data.get("choices", []))
-    return ChatCompletion(
-        choices=choices,
-        model=model,
-        finish_reason=data.get("choices", [{}])[0].get("finish_reason")
-        if choices
-        else None,
-    )
-
-
-def _parse_choices(choices_data: list[dict[str, Any]]) -> list[Choice]:
-    choices = []
-    for i, choice_data in enumerate(choices_data):
-        message_data = choice_data.get("message", {})
-        message = Message(
-            content=message_data.get("content") or "",
-            role=message_data.get("role", "assistant"),
-            reasoning_content=message_data.get("reasoning_content"),
-        )
-
-        tool_calls = _extract_tool_calls(choice_data, message_data)
-        finish_reason = choice_data.get("finish_reason")
-
-        choices.append(
-            Choice(
-                message=message,
-                index=choice_data.get("index", i),
-                finish_reason=finish_reason,
-                tool_calls=tool_calls,
-            )
-        )
-
-    return choices
-
-
-def _extract_tool_calls(
-    choice_data: dict[str, Any], message_data: dict[str, Any]
-) -> list[dict[str, Any]]:
-    tool_calls = choice_data.get("tool_calls")
-    if tool_calls is not None:
-        return tool_calls
-    return message_data.get("tool_calls", [])

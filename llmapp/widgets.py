@@ -1,9 +1,15 @@
-"""Reusable TUI widgets for llmapp."""
+"""Reusable TUI widgets and modal screens for llmapp."""
+
+from __future__ import annotations
 
 from typing import Any
+from shlex import split as shlex_split
 
-from textual.widgets import Static, Input
-from textual.containers import VerticalScroll
+from textual.app import ComposeResult
+from textual.containers import VerticalScroll, Vertical, Horizontal
+from textual.screen import ModalScreen, Screen
+from llmlib.models import Message, StreamEvent
+from textual.widgets import Static, Input, Label, RadioButton, RadioSet, Button, TextArea
 
 from .constants import THINKING_PLACEHOLDER
 
@@ -89,9 +95,7 @@ class ConfigModal(Static):
         super().__init__()
         self.config = config
 
-    def compose(self) -> Any:
-        from textual.app import ComposeResult
-
+    def compose(self) -> ComposeResult:
         yield Static("[bold]Current Configuration[/bold]", markup=True)
         yield Static(f"API URL: {self.config.get('api_url', '')}")
         yield Static(
@@ -103,5 +107,160 @@ class ConfigModal(Static):
         mcp = self.config.get_mcp_servers()
         if mcp:
             yield Static("MCP Servers:")
-            for name, url in mcp.items():
-                yield Static(f"  - {name}: {url}")
+            for name, cfg in mcp.items():
+                target = cfg.url if cfg.server_type == "remote" else " ".join(cfg.command)
+                yield Static(f"  - {name} ({cfg.server_type}): {target}")
+
+
+class AddMCPServerModal(ModalScreen[dict[str, Any] | None]):
+    """Modal form for adding an MCP server."""
+
+    DEFAULT_CSS = """
+    AddMCPServerModal {
+        align: center middle;
+    }
+
+    #modal-container {
+        width: 60;
+        height: auto;
+        max-height: 80vh;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+
+    #modal-title {
+        text-align: center;
+        margin-bottom: 1;
+        color: $primary;
+        text-style: bold;
+    }
+
+    #form-scroll {
+        height: auto;
+        max-height: 20;
+        padding: 0 1;
+    }
+
+    .field-label {
+        margin-top: 1;
+        text-style: bold;
+    }
+
+    #remote-fields, #local-fields {
+        display: none;
+        height: auto;
+    }
+
+    #remote-fields.visible, #local-fields.visible {
+        display: block;
+    }
+
+    #button-row {
+        margin-top: 1;
+        align: right middle;
+        height: auto;
+    }
+
+    #btn-cancel {
+        margin-right: 1;
+    }
+
+    TextArea {
+        height: 5;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss(None)", "Cancel"),
+        ("ctrl+q", "dismiss(None)", "Cancel"),
+    ]
+
+    def on_mount(self) -> None:
+        self.query_one("#input-name").focus()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-container"):
+            yield Label("Add MCP Server", id="modal-title")
+
+            with VerticalScroll(id="form-scroll"):
+                yield Label("Name:", classes="field-label")
+                yield Input(placeholder="my-server", id="input-name")
+
+                yield Label("Type:", classes="field-label")
+                with RadioSet(id="type-radio"):
+                    yield RadioButton("Remote (HTTP/SSE)", value=True, id="radio-remote")
+                    yield RadioButton("Local (stdio/command)", id="radio-local")
+
+                with Vertical(id="remote-fields", classes="visible"):
+                    yield Label("URL:", classes="field-label")
+                    yield Input(placeholder="http://localhost:8080/sse", id="input-url")
+                    yield Label("Headers (key: value, one per line):", classes="field-label")
+                    yield TextArea(id="input-headers")
+
+                with Vertical(id="local-fields"):
+                    yield Label("Command:", classes="field-label")
+                    yield Input(
+                        placeholder="npx -y @modelcontextprotocol/server-brave-search",
+                        id="input-command"
+                    )
+
+            with Horizontal(id="button-row"):
+                yield Button("Cancel", variant="default", id="btn-cancel")
+                yield Button("Add Server", variant="primary", id="btn-add")
+
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        is_remote = event.index == 0
+        self.query_one("#remote-fields").set_class(is_remote, "visible")
+        self.query_one("#local-fields").set_class(not is_remote, "visible")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn-add":
+            result = self._build_result()
+            if result:
+                self.dismiss(result)
+
+    def _build_result(self) -> dict[str, Any] | None:
+        name = self.query_one("#input-name", Input).value.strip()
+        if not name:
+            self.app.notify("Name is required.", severity="error")
+            return None
+
+        radio_set = self.query_one("#type-radio", RadioSet)
+        is_remote = radio_set.pressed_index == 0
+
+        if is_remote:
+            return self._build_remote_result(name)
+        return self._build_local_result(name)
+
+    def _build_remote_result(self, name: str) -> dict[str, Any] | None:
+        url = self.query_one("#input-url", Input).value.strip()
+        if not url:
+            self.app.notify("URL is required for remote servers.", severity="error")
+            return None
+        headers = self._parse_headers()
+        return {"name": name, "type": "remote", "url": url, "headers": headers}
+
+    def _build_local_result(self, name: str) -> dict[str, Any] | None:
+        raw_command = self.query_one("#input-command", Input).value.strip()
+        if not raw_command:
+            self.app.notify("Command is required for local servers.", severity="error")
+            return None
+        try:
+            command = shlex_split(raw_command)
+        except ValueError as error:
+            self.app.notify(f"Invalid command: {error}", severity="error")
+            return None
+        return {"name": name, "type": "local", "command": command}
+
+    def _parse_headers(self) -> dict[str, str]:
+        raw = self.query_one("#input-headers", TextArea).text
+        headers: dict[str, str] = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if ":" in line:
+                key, _, value = line.partition(":")
+                headers[key.strip()] = value.strip()
+        return headers

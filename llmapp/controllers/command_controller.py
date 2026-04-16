@@ -1,8 +1,6 @@
-"""Command dispatch actions for ChatApp."""
-
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, Callable
+import asyncio
+import inspect
+from typing import TYPE_CHECKING, Callable, Any
 
 from llmapp.command import Command, CommandHandler
 
@@ -16,12 +14,12 @@ class CommandController:
     def __init__(self, app: "ChatApp") -> None:
         self._app = app
 
-    def handle_input(self, text: str) -> bool:
+    async def handle_input(self, text: str) -> bool:
         command = self._app.command_handler.parse(text)
         if not command:
             return False
 
-        result = self.execute(command)
+        result = await self.execute(command)
         if result == "quit":
             self._app.exit()
             return True
@@ -29,8 +27,8 @@ class CommandController:
             self._app._add_message("system", result)
         return True
 
-    def execute(self, command: Command) -> str:
-        handlers: dict[str, Callable[[], str]] = {
+    async def execute(self, command: Command) -> str:
+        handlers: dict[str, Any] = {
             "help": self._help,
             "config": self._config,
             "mcp": lambda: self._mcp(command.args),
@@ -42,7 +40,13 @@ class CommandController:
         }
         handler = handlers.get(command.name)
         if handler:
-            return handler()
+            if inspect.iscoroutinefunction(handler):
+                return await handler()
+            # Handle lambdas or sync functions
+            res = handler()
+            if asyncio.iscoroutine(res):
+                return await res
+            return res
         return f"Unknown command: /{command.name}"
 
     def _help(self) -> str:
@@ -52,25 +56,21 @@ class CommandController:
         self._app.runtime_controller.show_config()
         return ""
 
-    def _mcp(self, args: list[str]) -> str:
+    async def _mcp(self, args: list[str]) -> str:
         if not args:
-            return "Usage: /mcp add <name> <url> | list | remove <name>"
-
+            return self._format_mcp_servers(self._app.runtime_controller.list_mcp_servers())
         subcommand = args[0].lower()
         if subcommand == "add":
-            if len(args) < 3:
-                return "Usage: /mcp add <name> <url>"
-            name, url = args[1], args[2]
-            return self._app.runtime_controller.add_mcp_server(name, url)
+            self._app.open_add_mcp_modal()
+            return ""
         if subcommand == "list":
-            return self._format_mcp_servers(
-                self._app.runtime_controller.list_mcp_servers()
-            )
+            return self._format_mcp_servers(self._app.runtime_controller.list_mcp_servers())
         if subcommand == "remove":
             if len(args) < 2:
                 return "Usage: /mcp remove <name>"
-            return self._app.runtime_controller.remove_mcp_server(args[1])
+            return await self._app.runtime_controller.remove_mcp_server(args[1])
         return f"Unknown MCP subcommand: {subcommand}"
+
 
     def _session(self, args: list[str]) -> str:
         if not args or args[0].lower() == "list":
@@ -105,12 +105,13 @@ class CommandController:
         self.request_quit()
         return "quit"
 
-    def _format_mcp_servers(self, servers: dict[str, str]) -> str:
+    def _format_mcp_servers(self, servers: dict) -> str:
         if not servers:
             return "No MCP servers configured."
         lines = ["Configured MCP servers:"]
-        for name, url in servers.items():
-            lines.append(f"  {name}: {url}")
+        for name, cfg in servers.items():
+            target = cfg.url if cfg.server_type == "remote" else " ".join(cfg.command)
+            lines.append(f"  {name} ({cfg.server_type}): {target}")
         return "\n".join(lines)
 
     def streaming_command(self, args: list[str]) -> str:

@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from llmapp.constants import THINKING_PLACEHOLDER
-from llmlib.runtime import StreamEvent
+from llmlib import StreamEvent
 
 if TYPE_CHECKING:
     from llmapp.app import ChatApp
@@ -57,9 +57,15 @@ class StreamController:
                 )
         except asyncio.CancelledError:
             self._apply_cancelled_fallback(msg_idx)
+            # Re-raise to ensure the task is correctly stopped
             raise
         except Exception as error:
-            error_text = f"\nError: {error}"
+            error_msg = str(error)
+            if "Attempted to exit cancel scope" in error_msg:
+                # Masking the anyio task mismatch error for the user but logging it
+                error_msg = "MCP Client Connection mismatch (internal error)"
+            
+            error_text = f"\n[bold red]⚠ Error:[/bold red] {error_msg}"
             self._app.messages[msg_idx]["content"] += error_text
             self._append_content(error_text)
             got_output = True

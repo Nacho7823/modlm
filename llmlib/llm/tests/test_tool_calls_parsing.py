@@ -1,6 +1,6 @@
 """Regression tests for tool_calls parsing from completion responses."""
 
-from llmlib.llm.client import _parse_completion
+from llmlib.models import ChatCompletion
 
 
 def test_parse_completion_reads_tool_calls_from_choice_level() -> None:
@@ -21,7 +21,7 @@ def test_parse_completion_reads_tool_calls_from_choice_level() -> None:
         ]
     }
 
-    completion = _parse_completion(data, "test-model")
+    completion = ChatCompletion.from_raw(data)
 
     assert len(completion.tool_calls) == 1
     assert completion.tool_calls[0]["function"]["name"] == "foo"
@@ -40,9 +40,9 @@ def test_parse_completion_reads_tool_calls_from_message_level() -> None:
                             "id": "374885387",
                             "type": "function",
                             "function": {
-                                "name": "websearch__web_search_exa",
-                                "arguments": '{"query":"ia"}',
-                            },
+                                            "name": "websearch__web_search_exa",
+                                            "arguments": '{"query":"ia"}',
+                                        },
                         }
                     ],
                 },
@@ -51,7 +51,7 @@ def test_parse_completion_reads_tool_calls_from_message_level() -> None:
         ]
     }
 
-    completion = _parse_completion(data, "qwen3.5-4b")
+    completion = ChatCompletion.from_raw(data)
 
     assert len(completion.tool_calls) == 1
     assert completion.tool_calls[0]["id"] == "374885387"

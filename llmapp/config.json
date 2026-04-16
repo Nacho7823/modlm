@@ -4,6 +4,25 @@
   "model": "qwen3.5-4b",
   "streaming": true,
   "mcp_servers": {
-    "webseach": "https://mcp.exa.ai/mcp"
+    "webseach": {
+      "type": "remote",
+      "url": "https://mcp.exa.ai/mcp"
+    },
+    "jsbox": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "js-mcp"
+      ]
+    },
+    "bash": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "super-shell-mcp"
+      ]
+    }
   }
 }

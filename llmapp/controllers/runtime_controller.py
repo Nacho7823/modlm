@@ -4,22 +4,26 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from llmlib.runtime import LLMSettings
+from llmlib.models import LLMSettings, MCPServerConfig
 
 if TYPE_CHECKING:
     from llmapp.app import ChatApp
 
 
 class RuntimeController:
-    """Coordinates app config persistence and llmlib runtime wiring."""
+    """Coordinates app config persistence and llmlib wiring."""
 
     def __init__(self, app: "ChatApp") -> None:
         self._app = app
 
-    def configure_runtime(self) -> None:
+    async def shutdown(self) -> None:
+        """Cleanup all runtime resources."""
+        await self._app.runtime.shutdown()
+
+    async def configure_runtime(self) -> None:
         api_url, api_key, model = self._app.config_manager.get_api_config()
         settings = LLMSettings(api_url=api_url, api_key=api_key, model=model)
-        warnings = self._app.runtime.configure(
+        warnings = await self._app.runtime.configure(
             settings,
             self._app.config_manager.get_mcp_servers(),
         )
@@ -38,20 +42,21 @@ class RuntimeController:
         ]
         if mcp_servers:
             lines.append("MCP Servers:")
-            for name, url in mcp_servers.items():
-                lines.append(f"  - {name}: {url}")
+            for name, cfg in mcp_servers.items():
+                target = cfg.url if cfg.server_type == "remote" else " ".join(cfg.command)
+                lines.append(f"  - {name} ({cfg.server_type}): {target}")
         self._app._add_message("system", "\n".join(lines))
 
-    def list_mcp_servers(self) -> dict[str, str]:
+    def list_mcp_servers(self) -> dict[str, MCPServerConfig]:
         return self._app.runtime.list_mcp_servers()
 
-    def add_mcp_server(self, name: str, url: str) -> str:
-        self._app.config_manager.add_mcp_server(name, url)
-        return self._app.runtime.add_mcp_server(name, url)
+    async def add_mcp_server(self, config: MCPServerConfig) -> str:
+        self._app.config_manager.add_mcp_server(config)
+        return await self._app.runtime.add_mcp_server(config)
 
-    def remove_mcp_server(self, name: str) -> str:
+    async def remove_mcp_server(self, name: str) -> str:
         if self._app.config_manager.remove_mcp_server(name):
-            self._app.runtime.remove_mcp_server(name)
+            await self._app.runtime.remove_mcp_server(name)
             return f"MCP server '{name}' removed."
         return f"MCP server '{name}' not found."
 

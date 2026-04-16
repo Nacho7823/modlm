@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from llmlib.llm import OpenAI
 
-from .types import LLMSettings
+from llmlib.models import LLMSettings
 
 
 class LLMRuntime:

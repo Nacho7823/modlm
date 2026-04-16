@@ -2,36 +2,33 @@
 
 from .llm import (
     Chat,
-    ChatCompletion,
-    Choice,
     Completions,
-    Message,
     OpenAI,
-    Tool,
-    ToolCall,
-    ToolExecutor,
-    ToolResult,
+    ChatOrchestrator,
+    LLMRuntime,
 )
 from .mcp import (
     HTTPMCPClient,
     MCPClientBase,
-    MCPConnectionError,
-    MCPToolError,
     LocalMCPClient,
-    MCPToolResult,
     RemoteMCPClient,
-    ToolSchema,
     create_mcp_client,
     create_mcp_client_from_config,
-)
-from .runtime import (
-    ChatMessage,
-    ChatOrchestrator,
-    ChatRuntime,
-    LLMRuntime,
+    ToolExecutor,
     MCPRegistry,
+)
+from .chat_runtime import ChatRuntime
+from llmlib.models import (
+    ChatCompletion,
+    Choice,
+    Message,
+    ToolCall,
+    ToolResult,
     LLMSettings,
+    MCPServerConfig,
     StreamEvent,
+    MCPConnectionError,
+    MCPToolError,
 )
 
 __all__ = [
@@ -49,8 +46,6 @@ __all__ = [
     "LocalMCPClient",
     "HTTPMCPClient",
     "RemoteMCPClient",
-    "ToolSchema",
-    "MCPToolResult",
     "MCPConnectionError",
     "MCPToolError",
     "create_mcp_client",
@@ -60,6 +55,6 @@ __all__ = [
     "LLMRuntime",
     "MCPRegistry",
     "LLMSettings",
-    "ChatMessage",
+    "MCPServerConfig",
     "StreamEvent",
 ]

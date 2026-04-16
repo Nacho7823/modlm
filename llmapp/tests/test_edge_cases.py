@@ -4,6 +4,7 @@ import pytest
 from llmapp.config import ConfigManager
 from llmapp.history import ConversationManager
 from llmapp.command import CommandHandler, Command
+from llmlib.models import MCPServerConfig
 
 
 class TestConfigManagerEdgeCases:
@@ -29,8 +30,8 @@ class TestConfigManagerEdgeCases:
         manager = ConfigManager(tmp_path)
         manager.load()
         manager._config["mcp_servers"] = {}
-        manager.add_mcp_server("server1", "http://localhost:8080")
-        manager.add_mcp_server("server2", "http://localhost:8081")
+        manager.add_mcp_server(MCPServerConfig(name="server1", server_type="remote", url="http://localhost:8080"))
+        manager.add_mcp_server(MCPServerConfig(name="server2", server_type="remote", url="http://localhost:8081"))
         servers = manager.get_mcp_servers()
         assert len(servers) == 2
         assert "server1" in servers
@@ -94,31 +95,38 @@ class TestCommandHandlerEdgeCases:
         assert cmd.name == "mcp"
         assert cmd.args == ["add", "server", "url"]
 
-    def test_execute_mcp_without_args(self, chat_app):
-        result = chat_app.command_controller.execute(
+    @pytest.mark.asyncio
+    async def test_execute_mcp_without_args(self, chat_app):
+        # Should now list instead of opening modal
+        result = await chat_app.command_controller.execute(
             Command(name="mcp", args=[], raw="/mcp")
         )
-        assert "Usage" in result
+        assert "MCP servers" in result
 
-    def test_execute_session_without_args(self, chat_app):
-        result = chat_app.command_controller.execute(
+    @pytest.mark.asyncio
+    async def test_execute_session_without_args(self, chat_app):
+        result = await chat_app.command_controller.execute(
             Command(name="session", args=[], raw="/session")
         )
         assert (
             "Usage" in result or "No saved" in result or "Saved conversations" in result
         )
 
-    def test_execute_mcp_add_missing_args(self, chat_app):
-        result = chat_app.command_controller.execute(
+    @pytest.mark.asyncio
+    async def test_execute_mcp_add_missing_args(self, chat_app, monkeypatch):
+        monkeypatch.setattr(chat_app, "open_add_mcp_modal", lambda: None)
+        result = await chat_app.command_controller.execute(
             Command(name="mcp", args=["add"], raw="/mcp add")
         )
-        assert "Usage" in result
+        assert result == ""  # Modal opened
 
-    def test_execute_mcp_add_only_name(self, chat_app):
-        result = chat_app.command_controller.execute(
+    @pytest.mark.asyncio
+    async def test_execute_mcp_add_only_name(self, chat_app, monkeypatch):
+        monkeypatch.setattr(chat_app, "open_add_mcp_modal", lambda: None)
+        result = await chat_app.command_controller.execute(
             Command(name="mcp", args=["add", "server"], raw="/mcp add server")
         )
-        assert "Usage" in result
+        assert result == ""  # Modal opened regardless of args if first is 'add'
 
 
 class TestMessageView:
@@ -216,7 +224,7 @@ class TestConfigPersistence:
     def test_mcp_servers_persist(self, tmp_path):
         manager1 = ConfigManager(tmp_path)
         manager1.load()
-        manager1.add_mcp_server("persist", "http://localhost:9999")
+        manager1.add_mcp_server(MCPServerConfig(name="persist", server_type="remote", url="http://localhost:9999"))
         manager1.save()
 
         manager2 = ConfigManager(tmp_path)
