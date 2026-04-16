@@ -1,42 +1,15 @@
-"""Tests for MCP tool wiring in llmapp."""
+"""Runtime-level tests for MCP tool-calling orchestration."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
 
-from llmlib.runtime import ChatOrchestrator, ChatRuntime, LLMSettings
+from llmlib.runtime import ChatMessage, ChatOrchestrator, ChatRuntime, LLMSettings
 
 
-class _ConfigStub:
-    def __init__(self) -> None:
-        self._servers: dict[str, str] = {}
-
-    def add_mcp_server(self, name: str, url: str) -> None:
-        self._servers[name] = url
-
-    def get_mcp_servers(self) -> dict[str, str]:
-        return dict(self._servers)
-
-    def get_api_config(self) -> tuple[str, str, str]:
-        return ("http://127.0.0.1:1234/v1", "", "qwen3.5-4b")
-
-
-class _AppStub:
-    def __init__(self) -> None:
-        self.config_manager = _ConfigStub()
-        self.runtime = ChatRuntime()
-        self.messages: list[dict[str, str]] = []
-        self.system_messages: list[str] = []
-
-    def _add_message(self, role: str, msg: str) -> None:
-        self.messages.append({"role": role, "content": msg})
-        if role == "system":
-            self.system_messages.append(msg)
-
-
-def test_mcp_service_add_uses_name_and_url(monkeypatch):
-    app = _AppStub()
+def test_mcp_registry_add_uses_name_and_url(monkeypatch) -> None:
+    runtime = ChatRuntime()
     seen: dict[str, str] = {}
 
     class FakeHTTPMCPClient:
@@ -46,16 +19,15 @@ def test_mcp_service_add_uses_name_and_url(monkeypatch):
 
     monkeypatch.setattr("llmlib.runtime.mcp_registry.HTTPMCPClient", FakeHTTPMCPClient)
 
-    result = app.runtime.add_mcp_server("websearch", "https://mcp.exa.ai/mcp")
+    result = runtime.add_mcp_server("websearch", "https://mcp.exa.ai/mcp")
 
     assert "websearch" in result
     assert seen == {"name": "websearch", "url": "https://mcp.exa.ai/mcp"}
-    assert "websearch" in app.runtime.list_mcp_servers()
+    assert "websearch" in runtime.list_mcp_servers()
 
 
-def test_config_service_init_mcp_clients_uses_name_and_url(monkeypatch):
-    app = _AppStub()
-    app.config_manager.add_mcp_server("exa", "https://mcp.exa.ai/mcp")
+def test_runtime_configure_mcp_clients_uses_name_and_url(monkeypatch) -> None:
+    runtime = ChatRuntime()
     seen: list[tuple[str, str]] = []
 
     class FakeHTTPMCPClient:
@@ -64,12 +36,11 @@ def test_config_service_init_mcp_clients_uses_name_and_url(monkeypatch):
 
     monkeypatch.setattr("llmlib.runtime.mcp_registry.HTTPMCPClient", FakeHTTPMCPClient)
 
-    api_url, api_key, model = app.config_manager.get_api_config()
-    settings = LLMSettings(api_url=api_url, api_key=api_key, model=model)
-    app.runtime.configure(settings, app.config_manager.get_mcp_servers())
+    settings = LLMSettings(api_url="http://127.0.0.1:1234/v1", api_key="", model="qwen")
+    runtime.configure(settings, {"exa": "https://mcp.exa.ai/mcp"})
 
     assert seen == [("exa", "https://mcp.exa.ai/mcp")]
-    assert "exa" in app.runtime.list_mcp_servers()
+    assert "exa" in runtime.list_mcp_servers()
 
 
 @dataclass
@@ -200,7 +171,7 @@ class _FakeClientAsyncNoToolCalls:
         )()
 
 
-def test_stream_responder_executes_mcp_tools_before_final_response():
+def test_stream_responder_executes_mcp_tools_before_final_response() -> None:
     async def _run() -> None:
         fake_client = _FakeClientAsync()
         fake_mcp = _FakeMCPClient()
@@ -210,10 +181,11 @@ def test_stream_responder_executes_mcp_tools_before_final_response():
         )
 
         content_chunks = []
-        async for content, _thinking in responder.stream(
-            [{"role": "user", "content": "dime hora"}]
+        async for event in responder.stream(
+            [ChatMessage(role="user", content="dime hora")]
         ):
-            content_chunks.append(content)
+            if event.kind == "content":
+                content_chunks.append(event.text)
 
         full_content = "".join(content_chunks)
         assert "Respuesta final" in full_content
@@ -227,7 +199,7 @@ def test_stream_responder_executes_mcp_tools_before_final_response():
     asyncio.run(_run())
 
 
-def test_stream_responder_does_not_force_tool_when_model_emits_no_tool_calls():
+def test_stream_responder_does_not_force_tool_when_model_emits_no_tool_calls() -> None:
     async def _run() -> None:
         fake_client = _FakeClientAsyncNoToolCalls()
         fake_mcp = _FakeMCPClient()
@@ -237,12 +209,14 @@ def test_stream_responder_does_not_force_tool_when_model_emits_no_tool_calls():
         )
 
         chunks = []
-        async for content, _thinking in responder.stream(
-            [{"role": "user", "content": "busca noticias IA de hoy"}]
+        async for event in responder.stream(
+            [ChatMessage(role="user", content="busca noticias IA de hoy")]
         ):
-            chunks.append(content)
+            if event.kind == "content":
+                chunks.append(event.text)
 
-        assert "No puedo usar herramientas directamente." in "".join(chunks)
+        assert "Hecho con web." in "".join(chunks)
         assert fake_mcp.calls == []
+        assert len(fake_client.chat_async.completions.requests) >= 2
 
     asyncio.run(_run())

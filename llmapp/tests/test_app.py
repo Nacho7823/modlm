@@ -1,5 +1,7 @@
 """Tests for llmapp using Textual native testing."""
 
+import asyncio
+
 import pytest
 from llmapp.config import ConfigManager
 from llmapp.history import ConversationManager
@@ -115,14 +117,15 @@ class TestCommandHandler:
         cmd = handler.parse("Hello world")
         assert cmd is None
 
-    def test_execute_help(self):
-        handler = CommandHandler()
-        result = handler.execute(Command(name="help", args=[], raw="/help"))
+    def test_help_text(self):
+        result = CommandHandler.help_text()
         assert "Available commands:" in result
 
-    def test_execute_unknown(self):
-        handler = CommandHandler()
-        result = handler.execute(Command(name="unknown", args=[], raw="/unknown"))
+    def test_execute_unknown(self, chat_app):
+        app = chat_app
+        result = app.command_controller.execute(
+            Command(name="unknown", args=[], raw="/unknown")
+        )
         assert "Unknown command" in result
 
 
@@ -196,6 +199,25 @@ class TestChatAppIntegration:
         app = chat_app
         result = app.history_controller.delete("nonexistent")
         assert "not found" in result
+
+    @pytest.mark.asyncio
+    async def test_on_unmount_waits_cancelled_stream_task(self, chat_app):
+        app = chat_app
+
+        async def _never() -> None:
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                raise
+
+        task = asyncio.create_task(_never())
+        app._streaming_task = task
+        app._streaming_active = True
+
+        await app.on_unmount()
+
+        assert task.cancelled()
+        assert app._streaming_active is False
 
 
 class TestMessageView:

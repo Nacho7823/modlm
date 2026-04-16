@@ -67,18 +67,7 @@ class ChatApp(App):
         self.runtime_controller = RuntimeController(self)
         self.stream_controller = StreamController(self)
         self.command_controller = CommandController(self)
-        self.command_handler = CommandHandler(
-            config_handler=self.runtime_controller.show_config,
-            mcp_add_handler=self.runtime_controller.add_mcp_server,
-            mcp_list_handler=self.runtime_controller.list_mcp_servers,
-            mcp_remove_handler=self.runtime_controller.remove_mcp_server,
-            session_list_handler=self.history_controller.list,
-            session_load_handler=self.history_controller.load,
-            session_delete_handler=self.history_controller.delete,
-            new_handler=self.history_controller.start_new,
-            streaming_handler=self.command_controller.streaming_command,
-            quit_handler=self.command_controller.request_quit,
-        )
+        self.command_handler = CommandHandler()
         self._streaming_task: asyncio.Task | None = None
         self._streaming_active = False
 
@@ -128,3 +117,12 @@ class ChatApp(App):
 
     def action_cancel_stream(self) -> None:
         self.stream_controller.cancel_active_stream()
+
+    async def on_unmount(self) -> None:
+        self.stream_controller.cancel_active_stream(notify=False)
+        task = self._streaming_task
+        if task:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

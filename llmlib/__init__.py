@@ -24,7 +24,15 @@ from .mcp import (
     create_mcp_client,
     create_mcp_client_from_config,
 )
-from .runtime import ChatOrchestrator, ChatRuntime, LLMRuntime, MCPRegistry, LLMSettings
+from .runtime import (
+    ChatMessage,
+    ChatOrchestrator,
+    ChatRuntime,
+    LLMRuntime,
+    MCPRegistry,
+    LLMSettings,
+    StreamEvent,
+)
 
 __all__ = [
     "OpenAI",
@@ -52,4 +60,6 @@ __all__ = [
     "LLMRuntime",
     "MCPRegistry",
     "LLMSettings",
+    "ChatMessage",
+    "StreamEvent",
 ]

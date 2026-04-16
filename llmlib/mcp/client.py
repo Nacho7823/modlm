@@ -7,6 +7,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -225,16 +226,19 @@ class HTTPMCPClient(MCPClientBase):
         self.url = url
         self.headers = headers or {}
         self._http_context = None
+        self._http_client: httpx.AsyncClient | None = None
 
     async def _create_transport(self) -> tuple[Any, Any]:
         """Create HTTP transport."""
-        from mcp.client.streamable_http import streamablehttp_client
+        from mcp.client.streamable_http import streamable_http_client
 
         logger.info(f"Starting HTTP client for {self.name} at {self.url}...")
 
-        self._http_context = streamablehttp_client(
+        self._http_client = httpx.AsyncClient(headers=self.headers)
+
+        self._http_context = streamable_http_client(
             self.url,
-            headers=self.headers,
+            http_client=self._http_client,
         )
         read, write, _ = await self._http_context.__aenter__()
         logger.info(f"HTTP transport ready for {self.name}")
@@ -245,6 +249,9 @@ class HTTPMCPClient(MCPClientBase):
         if self._http_context:
             await self._http_context.__aexit__(None, None, None)
             self._http_context = None
+        if self._http_client:
+            await self._http_client.aclose()
+            self._http_client = None
 
 
 RemoteMCPClient = HTTPMCPClient

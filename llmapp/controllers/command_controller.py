@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
+
+from llmapp.command import Command, CommandHandler
 
 if TYPE_CHECKING:
     from llmapp.app import ChatApp
@@ -19,13 +21,97 @@ class CommandController:
         if not command:
             return False
 
-        result = self._app.command_handler.execute(command)
+        result = self.execute(command)
         if result == "quit":
             self._app.exit()
             return True
         if result:
             self._app._add_message("system", result)
         return True
+
+    def execute(self, command: Command) -> str:
+        handlers: dict[str, Callable[[], str]] = {
+            "help": self._help,
+            "config": self._config,
+            "mcp": lambda: self._mcp(command.args),
+            "session": lambda: self._session(command.args),
+            "new": self._new,
+            "streaming": lambda: self.streaming_command(command.args),
+            "quit": self._quit,
+            "q": self._quit,
+        }
+        handler = handlers.get(command.name)
+        if handler:
+            return handler()
+        return f"Unknown command: /{command.name}"
+
+    def _help(self) -> str:
+        return CommandHandler.help_text()
+
+    def _config(self) -> str:
+        self._app.runtime_controller.show_config()
+        return ""
+
+    def _mcp(self, args: list[str]) -> str:
+        if not args:
+            return "Usage: /mcp add <name> <url> | list | remove <name>"
+
+        subcommand = args[0].lower()
+        if subcommand == "add":
+            if len(args) < 3:
+                return "Usage: /mcp add <name> <url>"
+            name, url = args[1], args[2]
+            return self._app.runtime_controller.add_mcp_server(name, url)
+        if subcommand == "list":
+            return self._format_mcp_servers(
+                self._app.runtime_controller.list_mcp_servers()
+            )
+        if subcommand == "remove":
+            if len(args) < 2:
+                return "Usage: /mcp remove <name>"
+            return self._app.runtime_controller.remove_mcp_server(args[1])
+        return f"Unknown MCP subcommand: {subcommand}"
+
+    def _session(self, args: list[str]) -> str:
+        if not args or args[0].lower() == "list":
+            return self._list_sessions()
+
+        subcommand = args[0].lower()
+        if subcommand == "load":
+            if len(args) < 2:
+                return "Usage: /session load <name>"
+            return self._app.history_controller.load(args[1])
+        if subcommand == "delete":
+            if len(args) < 2:
+                return "Usage: /session delete <name>"
+            return self._app.history_controller.delete(args[1])
+        return f"Unknown session subcommand: {subcommand}"
+
+    def _list_sessions(self) -> str:
+        sessions = self._app.history_controller.list()
+        if not sessions:
+            return "No saved conversations."
+
+        lines = ["Saved conversations:"]
+        for session in sessions:
+            lines.append(f"  {session['name']} ({session['message_count']} messages)")
+        return "\n".join(lines)
+
+    def _new(self) -> str:
+        self._app.history_controller.start_new()
+        return "Started new conversation."
+
+    def _quit(self) -> str:
+        self.request_quit()
+        return "quit"
+
+    def _format_mcp_servers(self, servers: dict[str, str]) -> str:
+        if not servers:
+            return "No MCP servers configured."
+        lines = ["Configured MCP servers:"]
+        for name, url in servers.items():
+            lines.append(f"  {name}: {url}")
+        return "\n".join(lines)
 
     def streaming_command(self, args: list[str]) -> str:
         current = bool(self._app.config_manager.get("streaming", True))

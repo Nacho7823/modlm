@@ -4,7 +4,7 @@ from .chat_orchestrator import ChatOrchestrator
 from .chat_runtime import ChatRuntime
 from .llm_runtime import LLMRuntime
 from .mcp_registry import MCPRegistry
-from .types import LLMSettings
+from .types import ChatMessage, LLMSettings, StreamEvent
 
 __all__ = [
     "ChatOrchestrator",
@@ -12,4 +12,6 @@ __all__ = [
     "LLMRuntime",
     "MCPRegistry",
     "LLMSettings",
+    "ChatMessage",
+    "StreamEvent",
 ]

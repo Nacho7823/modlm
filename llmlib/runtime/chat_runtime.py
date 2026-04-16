@@ -7,7 +7,7 @@ from typing import Any, AsyncIterator
 from .chat_orchestrator import ChatOrchestrator
 from .llm_runtime import LLMRuntime
 from .mcp_registry import MCPRegistry
-from .types import LLMSettings
+from .types import ChatMessage, LLMSettings, StreamEvent
 
 
 class ChatRuntime:
@@ -38,16 +38,34 @@ class ChatRuntime:
 
     async def stream(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, Any]] | list[ChatMessage],
         streaming_enabled: bool = True,
-    ) -> AsyncIterator[tuple[str, str]]:
+    ) -> AsyncIterator[StreamEvent]:
         """Stream response using configured LLM + MCP clients."""
         client_async = self._llm.client_async
         if client_async is None:
             raise ValueError("LLM runtime is not configured")
+
+        runtime_messages = self._normalize_messages(messages)
+
         orchestrator = ChatOrchestrator(
             client_async=client_async,
-            mcp_clients=self._mcp.list_clients(),
+            mcp_clients=self._mcp.build_clients(),
         )
-        async for chunk in orchestrator.stream(messages, streaming_enabled):
-            yield chunk
+        try:
+            async for event in orchestrator.stream(runtime_messages, streaming_enabled):
+                yield event
+        except Exception as error:
+            yield StreamEvent.error(f"\nError: {error}")
+            yield StreamEvent.done()
+
+    def _normalize_messages(
+        self,
+        messages: list[dict[str, Any]] | list[ChatMessage],
+    ) -> list[ChatMessage]:
+        if not messages:
+            return []
+        first = messages[0]
+        if isinstance(first, ChatMessage):
+            return list(messages)
+        return [ChatMessage.from_dict(message) for message in messages]

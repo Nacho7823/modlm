@@ -6,6 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from llmapp.constants import THINKING_PLACEHOLDER
+from llmlib.runtime import StreamEvent
 
 if TYPE_CHECKING:
     from llmapp.app import ChatApp
@@ -23,18 +24,19 @@ class StreamController:
         self._app._streaming_active = True
         self._app._streaming_task = asyncio.create_task(self._run_stream(msg_idx))
 
-    def cancel_active_stream(self) -> None:
+    def cancel_active_stream(self, notify: bool = True) -> None:
         task = self._app._streaming_task
         if task and not task.done():
             task.cancel()
             self._app._streaming_active = False
-            self._app._add_message("system", "Generation cancelled.")
+            if notify:
+                self._app._add_message("system", "Generation cancelled.")
         elif self._app._streaming_active:
             self._app._streaming_active = False
 
     def _create_assistant_placeholder(self) -> int:
         msg_idx = len(self._app.messages)
-        self._app.messages.append({"role": "assistant", "content": ""})
+        self._app.messages.append({"role": "assistant", "content": "", "thinking": ""})
         container = self._app._get_chat_container()
         container.add_message("assistant", "")
         self._append_thinking(THINKING_PLACEHOLDER)
@@ -44,14 +46,13 @@ class StreamController:
         got_output = False
         try:
             streaming_enabled = bool(self._app.config_manager.get("streaming", True))
-            async for content, thinking in self._app.runtime.stream(
+            async for event in self._app.runtime.stream(
                 self._app.messages,
                 streaming_enabled=streaming_enabled,
             ):
-                got_output = self._apply_chunk(
+                got_output = self._apply_event(
                     msg_idx,
-                    content,
-                    thinking,
+                    event,
                     got_output,
                 )
         except asyncio.CancelledError:
@@ -66,23 +67,27 @@ class StreamController:
             self._finalize_fallback(msg_idx, got_output)
             self._app._streaming_active = False
 
-    def _apply_chunk(
+    def _apply_event(
         self,
         msg_idx: int,
-        content: str,
-        thinking: str,
+        event: StreamEvent,
         got_output: bool,
     ) -> bool:
-        if content:
+        if event.kind == "content" and event.text:
             got_output = True
-            self._app.messages[msg_idx]["content"] += content
-            self._append_content(content)
+            self._app.messages[msg_idx]["content"] += event.text
+            self._append_content(event.text)
 
-        if thinking:
+        if event.kind == "thinking" and event.text:
             got_output = True
-            existing = self._app.messages[msg_idx].get("reasoning_content", "")
-            self._app.messages[msg_idx]["reasoning_content"] = existing + thinking
-            self._append_thinking(thinking)
+            existing = self._app.messages[msg_idx].get("thinking", "")
+            self._app.messages[msg_idx]["thinking"] = existing + event.text
+            self._append_thinking(event.text)
+
+        if event.kind == "error" and event.text:
+            got_output = True
+            self._app.messages[msg_idx]["content"] += event.text
+            self._append_content(event.text)
 
         return got_output
 

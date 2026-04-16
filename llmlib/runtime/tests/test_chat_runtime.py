@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from llmlib.runtime import ChatRuntime, LLMSettings
+from llmlib.runtime import ChatMessage, ChatRuntime, LLMSettings, StreamEvent
 from llmlib.runtime.chat_orchestrator import ChatOrchestrator
 
 
@@ -76,3 +76,157 @@ def test_chat_orchestrator_truncates_tool_result() -> None:
 
     assert len(truncated) < len(text)
     assert truncated.endswith("...[tool result truncated]")
+
+
+def test_chat_orchestrator_disconnects_each_client_once() -> None:
+    class _DummyClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def disconnect(self) -> None:
+            self.calls += 1
+
+    client = _DummyClient()
+    orchestrator = ChatOrchestrator(
+        client_async=object(),
+        mcp_clients={"a": client, "b": client},
+    )
+
+    asyncio.run(orchestrator._disconnect_clients())
+
+    assert client.calls == 1
+
+
+def test_chat_orchestrator_stream_returns_typed_events() -> None:
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            if kwargs.get("stream"):
+
+                async def _stream():
+                    yield {"choices": [{"delta": {"content": "hola"}}]}
+
+                return _stream()
+            return type(
+                "_Completion",
+                (),
+                {
+                    "choices": [
+                        type(
+                            "_Choice",
+                            (),
+                            {
+                                "tool_calls": [],
+                                "message": type("_Msg", (), {"content": "hola"})(),
+                            },
+                        )()
+                    ]
+                },
+            )()
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.chat_async = type(
+                "_ChatAsync", (), {"completions": _FakeCompletions()}
+            )()
+
+    async def _run() -> list[StreamEvent]:
+        orchestrator = ChatOrchestrator(client_async=_FakeClient(), mcp_clients={})
+        events: list[StreamEvent] = []
+        async for event in orchestrator.stream(
+            [ChatMessage(role="user", content="saluda")],
+            streaming_enabled=True,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_run())
+
+    assert events
+    assert any(event.kind == "content" and event.text == "hola" for event in events)
+    assert events[-1].kind == "done"
+
+
+def test_chat_orchestrator_emits_empty_completion_fallback() -> None:
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            if kwargs.get("stream"):
+
+                async def _stream():
+                    if False:
+                        yield {}
+
+                return _stream()
+
+            return type(
+                "_Completion",
+                (),
+                {
+                    "choices": [
+                        type(
+                            "_Choice",
+                            (),
+                            {
+                                "tool_calls": [],
+                                "message": type("_Msg", (), {"content": ""})(),
+                            },
+                        )()
+                    ]
+                },
+            )()
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.chat_async = type(
+                "_ChatAsync", (), {"completions": _FakeCompletions()}
+            )()
+
+    async def _run() -> list[StreamEvent]:
+        orchestrator = ChatOrchestrator(client_async=_FakeClient(), mcp_clients={})
+        events: list[StreamEvent] = []
+        async for event in orchestrator.stream(
+            [ChatMessage(role="user", content="hola")],
+            streaming_enabled=True,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_run())
+
+    assert any(
+        event.kind == "content"
+        and event.text == "No response returned by model (empty completion)."
+        for event in events
+    )
+
+
+def test_chat_runtime_emits_error_event_when_orchestrator_fails(monkeypatch) -> None:
+    class _BrokenOrchestrator:
+        def __init__(self, client_async, mcp_clients):
+            self._client_async = client_async
+            self._mcp_clients = mcp_clients
+
+        async def stream(self, messages, streaming_enabled=True):
+            raise RuntimeError("boom")
+            yield StreamEvent.done()
+
+    monkeypatch.setattr(
+        "llmlib.runtime.chat_runtime.ChatOrchestrator", _BrokenOrchestrator
+    )
+
+    runtime = ChatRuntime()
+    runtime.configure(
+        LLMSettings(api_url="http://127.0.0.1:1234/v1", api_key="", model="qwen"),
+        {},
+    )
+
+    async def _run() -> list[StreamEvent]:
+        events: list[StreamEvent] = []
+        async for event in runtime.stream([{"role": "user", "content": "hola"}]):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_run())
+
+    assert events[0].kind == "error"
+    assert "boom" in events[0].text
+    assert events[-1].kind == "done"

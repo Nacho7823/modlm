@@ -94,26 +94,28 @@ class TestCommandHandlerEdgeCases:
         assert cmd.name == "mcp"
         assert cmd.args == ["add", "server", "url"]
 
-    def test_execute_mcp_without_args(self):
-        handler = CommandHandler()
-        result = handler.execute(Command(name="mcp", args=[], raw="/mcp"))
+    def test_execute_mcp_without_args(self, chat_app):
+        result = chat_app.command_controller.execute(
+            Command(name="mcp", args=[], raw="/mcp")
+        )
         assert "Usage" in result
 
-    def test_execute_session_without_args(self):
-        handler = CommandHandler()
-        result = handler.execute(Command(name="session", args=[], raw="/session"))
+    def test_execute_session_without_args(self, chat_app):
+        result = chat_app.command_controller.execute(
+            Command(name="session", args=[], raw="/session")
+        )
         assert (
             "Usage" in result or "No saved" in result or "Saved conversations" in result
         )
 
-    def test_execute_mcp_add_missing_args(self):
-        handler = CommandHandler()
-        result = handler.execute(Command(name="mcp", args=["add"], raw="/mcp add"))
+    def test_execute_mcp_add_missing_args(self, chat_app):
+        result = chat_app.command_controller.execute(
+            Command(name="mcp", args=["add"], raw="/mcp add")
+        )
         assert "Usage" in result
 
-    def test_execute_mcp_add_only_name(self):
-        handler = CommandHandler()
-        result = handler.execute(
+    def test_execute_mcp_add_only_name(self, chat_app):
+        result = chat_app.command_controller.execute(
             Command(name="mcp", args=["add", "server"], raw="/mcp add server")
         )
         assert "Usage" in result

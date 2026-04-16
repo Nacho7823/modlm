@@ -7,6 +7,8 @@ from typing import Any, AsyncIterator
 
 from llmlib.llm import OpenAI, Tool, ToolCall
 
+from .types import ChatMessage, StreamEvent
+
 MAX_TOOL_STEPS = 4
 MAX_TOOL_RESULT_CHARS = 2000
 TOOL_RESULT_TRUNCATED_SUFFIX = "\n...[tool result truncated]"
@@ -25,33 +27,35 @@ class ChatOrchestrator:
 
     async def stream(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[ChatMessage],
         streaming_enabled: bool = True,
-    ) -> AsyncIterator[tuple[str, str]]:
-        """Yield (content, reasoning_content) chunks from the LLM."""
+    ) -> AsyncIterator[StreamEvent]:
+        """Yield typed stream events from the LLM runtime."""
         self._ensure_client()
 
         request_messages = self._prepare_request_messages(messages)
-        tools, tool_targets = await self._build_tool_list()
+        try:
+            tools, tool_targets = await self._build_tool_list()
 
-        thinking_chunks, tool_loop_content = await self._resolve_tool_calls(
-            request_messages,
-            tools,
-            tool_targets,
-        )
-        for thinking in thinking_chunks:
-            yield ("", thinking)
+            thinking_chunks, tool_loop_content = await self._resolve_tool_calls(
+                request_messages,
+                tools,
+                tool_targets,
+            )
+            for thinking in thinking_chunks:
+                if thinking:
+                    yield StreamEvent.thinking(thinking)
 
-        if tool_loop_content:
-            yield (tool_loop_content, "")
-            return
-
-        async for chunk in self._emit_final_response(
-            request_messages,
-            tools,
-            streaming_enabled,
-        ):
-            yield chunk
+            async for chunk in self._emit_final_response(
+                request_messages,
+                tools,
+                streaming_enabled,
+                fallback_content=tool_loop_content,
+            ):
+                yield chunk
+            yield StreamEvent.done()
+        finally:
+            await self._disconnect_clients()
 
     def _ensure_client(self) -> None:
         if not self._client:
@@ -59,22 +63,22 @@ class ChatOrchestrator:
 
     def _prepare_request_messages(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[ChatMessage],
     ) -> list[dict[str, Any]]:
         prepared: list[dict[str, Any]] = []
         for message in messages:
-            role = message.get("role")
-            content = message.get("content", "")
-            tool_calls = message.get("tool_calls")
+            role = message.role
+            content = message.content
+            tool_calls = message.tool_calls
 
             if role == "assistant" and not content and not tool_calls:
                 continue
 
-            prepared_message = {"role": message["role"], "content": content}
+            prepared_message = {"role": role, "content": content}
             if tool_calls:
                 prepared_message["tool_calls"] = tool_calls
-            if "tool_call_id" in message:
-                prepared_message["tool_call_id"] = message["tool_call_id"]
+            if message.tool_call_id:
+                prepared_message["tool_call_id"] = message.tool_call_id
             prepared.append(prepared_message)
 
         return prepared
@@ -153,7 +157,8 @@ class ChatOrchestrator:
         request_messages: list[dict[str, Any]],
         tools: list[Tool],
         streaming_enabled: bool,
-    ) -> AsyncIterator[tuple[str, str]]:
+        fallback_content: str = "",
+    ) -> AsyncIterator[StreamEvent]:
         final_tools = tools or None
 
         if streaming_enabled:
@@ -166,7 +171,10 @@ class ChatOrchestrator:
                 content, reasoning = self._extract_delta_text(chunk)
                 if content or reasoning:
                     emitted = True
-                yield (content, reasoning)
+                if content:
+                    yield StreamEvent.content(content)
+                if reasoning:
+                    yield StreamEvent.thinking(reasoning)
 
             if emitted:
                 return
@@ -175,7 +183,18 @@ class ChatOrchestrator:
             request_messages,
             final_tools,
         )
-        yield (content, reasoning)
+        if not content and not reasoning and fallback_content:
+            yield StreamEvent.content(fallback_content)
+            return
+        if not content and not reasoning:
+            yield StreamEvent.content(
+                "No response returned by model (empty completion)."
+            )
+            return
+        if content:
+            yield StreamEvent.content(content)
+        if reasoning:
+            yield StreamEvent.thinking(reasoning)
 
     def _extract_delta_text(self, chunk: dict[str, Any]) -> tuple[str, str]:
         delta = chunk.get("choices", [{}])[0].get("delta", {})
@@ -202,7 +221,7 @@ class ChatOrchestrator:
             if retry_content or retry_reasoning:
                 return retry_content, retry_reasoning
 
-        return "No pude obtener respuesta del modelo.", ""
+        return "", ""
 
     def _extract_choice_text(self, completion: Any) -> tuple[str, str]:
         if not completion or not getattr(completion, "choices", None):
@@ -284,6 +303,21 @@ class ChatOrchestrator:
             )
 
         return results
+
+    async def _disconnect_clients(self) -> None:
+        seen_ids: set[int] = set()
+        for client in self._mcp_clients.values():
+            client_id = id(client)
+            if client_id in seen_ids:
+                continue
+            seen_ids.add(client_id)
+            disconnect = getattr(client, "disconnect", None)
+            if disconnect is None:
+                continue
+            try:
+                await disconnect()
+            except Exception:
+                pass
 
     def _truncate_tool_result(self, content: str) -> str:
         if len(content) <= MAX_TOOL_RESULT_CHARS:
