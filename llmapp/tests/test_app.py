@@ -146,19 +146,21 @@ class TestChatAppIntegration:
 
     def test_list_sessions_empty(self, chat_app):
         app = chat_app
-        sessions = app._list_sessions()
+        sessions = app.history_controller.list()
         assert sessions == []
 
     def test_list_sessions_with_data(self, chat_app):
         app = chat_app
         app.history_manager.save("test", [{"role": "user", "content": "hi"}])
-        sessions = app._list_sessions()
+        sessions = app.history_controller.list()
         assert len(sessions) == 1
         assert sessions[0]["name"] == "test"
 
     def test_add_mcp_server_handler(self, chat_app):
         app = chat_app
-        result = app._add_mcp_server("test_server", "http://localhost:8080")
+        result = app.runtime_controller.add_mcp_server(
+            "test_server", "http://localhost:8080"
+        )
         assert "test_server" in result
         assert "test_server" in app.config_manager.get_mcp_servers()
         assert (
@@ -168,8 +170,8 @@ class TestChatAppIntegration:
 
     def test_remove_mcp_server_handler(self, chat_app):
         app = chat_app
-        app._add_mcp_server("to_remove", "http://localhost:8080")
-        result = app._remove_mcp_server("to_remove")
+        app.runtime_controller.add_mcp_server("to_remove", "http://localhost:8080")
+        result = app.runtime_controller.remove_mcp_server("to_remove")
         assert "removed" in result
         assert "to_remove" not in app.config_manager.get_mcp_servers()
 
@@ -181,18 +183,18 @@ class TestChatAppIntegration:
 
     def test_command_handler_mcp_list(self, chat_app):
         app = chat_app
-        app._add_mcp_server("server1", "http://localhost:8080")
-        servers = app._list_mcp_servers()
+        app.runtime_controller.add_mcp_server("server1", "http://localhost:8080")
+        servers = app.runtime_controller.list_mcp_servers()
         assert "server1" in servers
 
     def test_load_session_not_found(self, chat_app):
         app = chat_app
-        result = app._load_session("nonexistent")
+        result = app.history_controller.load("nonexistent")
         assert "not found" in result
 
     def test_delete_session_not_found(self, chat_app):
         app = chat_app
-        result = app._delete_session("nonexistent")
+        result = app.history_controller.delete("nonexistent")
         assert "not found" in result
 
 

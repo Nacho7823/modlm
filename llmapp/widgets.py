@@ -19,7 +19,12 @@ class MessageView(Static):
         self._update_display()
 
     def _update_display(self) -> None:
-        prefix = "You" if self.role == "user" else "Assistant"
+        if self.role == "user":
+            prefix = "You"
+        elif self.role == "system":
+            prefix = "System"
+        else:
+            prefix = "Assistant"
         text = f"[bold]{prefix}:[/bold]\n"
         if self._thinking:
             text += f"[i][dim]{self._thinking}[/dim][/i]\n"

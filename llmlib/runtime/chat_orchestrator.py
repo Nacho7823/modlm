@@ -1,4 +1,6 @@
-"""Streaming support for LLM responses."""
+"""Streaming orchestration for chat + MCP tool execution."""
+
+from __future__ import annotations
 
 import json
 from typing import Any, AsyncIterator
@@ -6,10 +8,12 @@ from typing import Any, AsyncIterator
 from llmlib.llm import OpenAI, Tool, ToolCall
 
 MAX_TOOL_STEPS = 4
+MAX_TOOL_RESULT_CHARS = 2000
+TOOL_RESULT_TRUNCATED_SUFFIX = "\n...[tool result truncated]"
 
 
-class StreamResponder:
-    """Handles LLM streaming, yielding chunks to caller."""
+class ChatOrchestrator:
+    """Handles LLM streaming with optional MCP tool execution."""
 
     def __init__(
         self,
@@ -30,12 +34,17 @@ class StreamResponder:
         request_messages = self._prepare_request_messages(messages)
         tools, tool_targets = await self._build_tool_list()
 
-        async for thinking in self._resolve_tool_calls(
+        thinking_chunks, tool_loop_content = await self._resolve_tool_calls(
             request_messages,
             tools,
             tool_targets,
-        ):
+        )
+        for thinking in thinking_chunks:
             yield ("", thinking)
+
+        if tool_loop_content:
+            yield (tool_loop_content, "")
+            return
 
         async for chunk in self._emit_final_response(
             request_messages,
@@ -66,8 +75,6 @@ class StreamResponder:
                 prepared_message["tool_calls"] = tool_calls
             if "tool_call_id" in message:
                 prepared_message["tool_call_id"] = message["tool_call_id"]
-            if message.get("reasoning_content"):
-                prepared_message["reasoning_content"] = message["reasoning_content"]
             prepared.append(prepared_message)
 
         return prepared
@@ -77,9 +84,10 @@ class StreamResponder:
         request_messages: list[dict[str, Any]],
         tools: list[Tool],
         tool_targets: dict[str, tuple[Any, str]],
-    ) -> AsyncIterator[str]:
+    ) -> tuple[list[str], str]:
+        thinking_chunks: list[str] = []
         if not tools:
-            return
+            return thinking_chunks, ""
 
         executed_calls: set[str] = set()
         for _ in range(MAX_TOOL_STEPS):
@@ -90,36 +98,44 @@ class StreamResponder:
             )
             choice = step.choices[0] if step.choices else None
             if not choice:
-                return
+                return thinking_chunks, ""
 
             tool_calls = choice.tool_calls or []
             reasoning_content = self._append_assistant_message(request_messages, choice)
             if reasoning_content:
-                yield reasoning_content
+                thinking_chunks.append(reasoning_content)
 
             if not tool_calls:
-                return
+                if choice.message.content:
+                    return thinking_chunks, choice.message.content
+                return thinking_chunks, ""
 
             call_keys = self._build_call_keys(tool_calls)
             if call_keys and call_keys.issubset(executed_calls):
-                return
+                return thinking_chunks, ""
 
             request_messages.extend(
                 await self._execute_mcp_tool_calls(tool_calls, tool_targets)
             )
             executed_calls.update(call_keys)
 
+        return thinking_chunks, ""
+
     def _append_assistant_message(
         self, request_messages: list[dict[str, Any]], choice: Any
     ) -> str:
+        content = choice.message.content or ""
+        reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
+        has_tool_calls = bool(choice.tool_calls)
+
+        if not content and not reasoning_content and not has_tool_calls:
+            return ""
+
         assistant_message: dict[str, Any] = {
             "role": "assistant",
-            "content": choice.message.content or "",
+            "content": content,
         }
 
-        reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
-        if reasoning_content:
-            assistant_message["reasoning_content"] = reasoning_content
         if choice.tool_calls:
             assistant_message["tool_calls"] = choice.tool_calls
 
@@ -254,8 +270,10 @@ class StreamResponder:
                 content = "\n".join(part for part in text_parts if part)
                 if not content:
                     content = "[empty tool result]"
-            except Exception as e:
-                content = f"Error: {e}"
+                else:
+                    content = self._truncate_tool_result(content)
+            except Exception as error:
+                content = f"Error: {error}"
 
             results.append(
                 {
@@ -266,3 +284,8 @@ class StreamResponder:
             )
 
         return results
+
+    def _truncate_tool_result(self, content: str) -> str:
+        if len(content) <= MAX_TOOL_RESULT_CHARS:
+            return content
+        return content[:MAX_TOOL_RESULT_CHARS].rstrip() + TOOL_RESULT_TRUNCATED_SUFFIX

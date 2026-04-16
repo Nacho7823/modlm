@@ -175,12 +175,12 @@ class TestCommandExecutionWithHandlers:
 
     def test_mcp_list_handler_returns_dict(self, chat_app):
         app = chat_app
-        result = app._list_mcp_servers()
+        result = app.runtime_controller.list_mcp_servers()
         assert isinstance(result, dict)
 
     def test_session_list_handler_returns_list(self, chat_app):
         app = chat_app
-        result = app._list_sessions()
+        result = app.history_controller.list()
         assert isinstance(result, list)
 
     def test_load_and_save_session(self, chat_app):
@@ -194,7 +194,7 @@ class TestCommandExecutionWithHandlers:
     def test_delete_and_verify(self, chat_app):
         app = chat_app
         app.history_manager.save("to_delete", [{"role": "user", "content": "test"}])
-        app._delete_session("to_delete")
+        app.history_controller.delete("to_delete")
         assert app.history_manager.load("to_delete") is None
 
 

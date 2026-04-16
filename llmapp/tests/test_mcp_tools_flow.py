@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from llmapp.services.config import ConfigService
-from llmapp.services.mcp import MCPService
-from llmapp.streaming import StreamResponder
+from llmlib.runtime import ChatOrchestrator, ChatRuntime, LLMSettings
 
 
 class _ConfigStub:
@@ -20,15 +18,21 @@ class _ConfigStub:
     def get_mcp_servers(self) -> dict[str, str]:
         return dict(self._servers)
 
+    def get_api_config(self) -> tuple[str, str, str]:
+        return ("http://127.0.0.1:1234/v1", "", "qwen3.5-4b")
+
 
 class _AppStub:
     def __init__(self) -> None:
         self.config_manager = _ConfigStub()
-        self.mcp_clients: dict[str, object] = {}
+        self.runtime = ChatRuntime()
+        self.messages: list[dict[str, str]] = []
         self.system_messages: list[str] = []
 
-    def _add_system_message(self, msg: str) -> None:
-        self.system_messages.append(msg)
+    def _add_message(self, role: str, msg: str) -> None:
+        self.messages.append({"role": role, "content": msg})
+        if role == "system":
+            self.system_messages.append(msg)
 
 
 def test_mcp_service_add_uses_name_and_url(monkeypatch):
@@ -40,14 +44,13 @@ def test_mcp_service_add_uses_name_and_url(monkeypatch):
             seen["name"] = name
             seen["url"] = url
 
-    monkeypatch.setattr("llmlib.mcp.HTTPMCPClient", FakeHTTPMCPClient)
+    monkeypatch.setattr("llmlib.runtime.mcp_registry.HTTPMCPClient", FakeHTTPMCPClient)
 
-    service = MCPService(app)
-    result = service.add("websearch", "https://mcp.exa.ai/mcp")
+    result = app.runtime.add_mcp_server("websearch", "https://mcp.exa.ai/mcp")
 
     assert "websearch" in result
     assert seen == {"name": "websearch", "url": "https://mcp.exa.ai/mcp"}
-    assert "websearch" in app.mcp_clients
+    assert "websearch" in app.runtime.list_mcp_servers()
 
 
 def test_config_service_init_mcp_clients_uses_name_and_url(monkeypatch):
@@ -59,13 +62,14 @@ def test_config_service_init_mcp_clients_uses_name_and_url(monkeypatch):
         def __init__(self, name: str, url: str):
             seen.append((name, url))
 
-    monkeypatch.setattr("llmlib.mcp.HTTPMCPClient", FakeHTTPMCPClient)
+    monkeypatch.setattr("llmlib.runtime.mcp_registry.HTTPMCPClient", FakeHTTPMCPClient)
 
-    service = ConfigService(app)
-    service._init_mcp_clients()
+    api_url, api_key, model = app.config_manager.get_api_config()
+    settings = LLMSettings(api_url=api_url, api_key=api_key, model=model)
+    app.runtime.configure(settings, app.config_manager.get_mcp_servers())
 
     assert seen == [("exa", "https://mcp.exa.ai/mcp")]
-    assert "exa" in app.mcp_clients
+    assert "exa" in app.runtime.list_mcp_servers()
 
 
 @dataclass
@@ -200,7 +204,7 @@ def test_stream_responder_executes_mcp_tools_before_final_response():
     async def _run() -> None:
         fake_client = _FakeClientAsync()
         fake_mcp = _FakeMCPClient()
-        responder = StreamResponder(
+        responder = ChatOrchestrator(
             fake_client,
             {"exa": fake_mcp},
         )
@@ -227,7 +231,7 @@ def test_stream_responder_does_not_force_tool_when_model_emits_no_tool_calls():
     async def _run() -> None:
         fake_client = _FakeClientAsyncNoToolCalls()
         fake_mcp = _FakeMCPClient()
-        responder = StreamResponder(
+        responder = ChatOrchestrator(
             fake_client,
             {"exa": fake_mcp},
         )
@@ -238,7 +242,7 @@ def test_stream_responder_does_not_force_tool_when_model_emits_no_tool_calls():
         ):
             chunks.append(content)
 
-        assert "Hecho con web" in "".join(chunks)
+        assert "No puedo usar herramientas directamente." in "".join(chunks)
         assert fake_mcp.calls == []
 
     asyncio.run(_run())
