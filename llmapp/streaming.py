@@ -20,7 +20,6 @@ class StreamResponder:
     async def stream(
         self,
         messages: list[dict[str, Any]],
-        max_tokens: int = 200,
         streaming_enabled: bool = True,
     ) -> AsyncIterator[tuple[str, str]]:
         """Yield (content, reasoning_content) chunks from the LLM."""
@@ -41,6 +40,8 @@ class StreamResponder:
                 msg["tool_calls"] = tool_calls
             if "tool_call_id" in m:
                 msg["tool_call_id"] = m["tool_call_id"]
+            if "reasoning_content" in m and m["reasoning_content"]:
+                msg["reasoning_content"] = m["reasoning_content"]
             request_messages.append(msg)
 
         tools, tool_targets = await self._build_tool_list()
@@ -52,7 +53,6 @@ class StreamResponder:
                     messages=request_messages,
                     tools=tools,
                     tool_choice="auto",
-                    max_tokens=max_tokens,
                 )
 
                 choice = step.choices[0] if step.choices else None
@@ -63,10 +63,18 @@ class StreamResponder:
                     "role": "assistant",
                     "content": choice.message.content or "",
                 }
+                reasoning_content = (
+                    getattr(choice.message, "reasoning_content", "") or ""
+                )
+                if reasoning_content:
+                    assistant_message["reasoning_content"] = reasoning_content
                 if choice.tool_calls:
                     assistant_message["tool_calls"] = choice.tool_calls
 
                 request_messages.append(assistant_message)
+
+                if reasoning_content:
+                    yield ("", reasoning_content)
 
                 if not choice.tool_calls:
                     break
@@ -92,7 +100,6 @@ class StreamResponder:
                 messages=request_messages,
                 tools=tools or None,
                 stream=True,
-                max_tokens=max_tokens,
             ):
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
                 content = delta.get("content", "")
@@ -105,7 +112,6 @@ class StreamResponder:
 
             content, reasoning = await self._final_non_stream_response(
                 request_messages,
-                max_tokens,
                 tools or None,
             )
             yield (content, reasoning)
@@ -113,7 +119,6 @@ class StreamResponder:
 
         content, reasoning = await self._final_non_stream_response(
             request_messages,
-            max_tokens,
             tools or None,
         )
         yield (content, reasoning)
@@ -121,13 +126,11 @@ class StreamResponder:
     async def _final_non_stream_response(
         self,
         messages: list[dict[str, Any]],
-        max_tokens: int,
         tools: list[Tool] | None,
     ) -> tuple[str, str]:
         completion = await self._client.chat_async.completions.create(
             messages=messages,
             tools=tools,
-            max_tokens=max_tokens,
         )
         content, reasoning = self._extract_choice_text(completion)
         if content or reasoning:
@@ -136,7 +139,6 @@ class StreamResponder:
         if tools:
             retry = await self._client.chat_async.completions.create(
                 messages=messages,
-                max_tokens=max_tokens,
             )
             retry_content, retry_reasoning = self._extract_choice_text(retry)
             if retry_content or retry_reasoning:
@@ -148,7 +150,7 @@ class StreamResponder:
         if not completion or not getattr(completion, "choices", None):
             return "", ""
         message = completion.choices[0].message
-        return message.content or "", message.reasoning_content or ""
+        return message.content or "", getattr(message, "reasoning_content", "") or ""
 
     async def _build_tool_list(self) -> tuple[list[Tool], dict[str, tuple[Any, str]]]:
         tools: list[Tool] = []

@@ -156,6 +156,8 @@ class ChatApp(App):
                     self._update_streaming_response(content)
                 if thinking:
                     got_output = True
+                    existing = self.messages[msg_idx].get("reasoning_content", "")
+                    self.messages[msg_idx]["reasoning_content"] = existing + thinking
                     self._update_streaming_thinking(thinking)
         except asyncio.CancelledError:
             if self.messages[msg_idx].get("content", "") == "":
