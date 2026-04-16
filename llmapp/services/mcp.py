@@ -22,9 +22,9 @@ class MCPService:
 
         self._app.config_manager.add_mcp_server(name, url)
         try:
-            client = HTTPMCPClient(base_url=url)
+            client = HTTPMCPClient(name=name, url=url)
             self._app.mcp_clients[name] = client
-            return f"MCP server '{name}' added and connected."
+            return f"MCP server '{name}' added."
         except Exception as e:
             return f"MCP server '{name}' added but failed to connect: {e}"
 

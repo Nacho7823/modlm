@@ -77,6 +77,7 @@ class ChatApp(App):
             session_load_handler=self._sessions_load,
             session_delete_handler=self._sessions_delete,
             new_handler=self._new_conversation,
+            streaming_handler=self._streaming_command,
             quit_handler=self._request_quit,
         )
 
@@ -130,26 +131,52 @@ class ChatApp(App):
         msg_idx = len(self.messages)
         self.messages.append({"role": "assistant", "content": ""})
         container = self._get_chat_container()
-        container.add_message("assistant", "Thinking...")
+        container.add_message("assistant", "")
+        self._update_streaming_thinking("Thinking...")
 
         self._streaming_active = True
 
-        self._streaming_task = asyncio.create_task(self._stream_response(text, msg_idx))
+        self._streaming_task = asyncio.create_task(self._stream_response(msg_idx))
 
-    async def _stream_response(self, prompt: str, msg_idx: int) -> None:
+    async def _stream_response(self, msg_idx: int) -> None:
+        got_output = False
         try:
-            responder = StreamResponder(self.client_async, self.messages)
-            async for content, thinking in responder.stream(prompt):
+            responder = StreamResponder(
+                self.client_async,
+                self.mcp_clients,
+            )
+            streaming_enabled = bool(self.config_manager.get("streaming", True))
+            async for content, thinking in responder.stream(
+                self.messages,
+                streaming_enabled=streaming_enabled,
+            ):
                 if content:
+                    got_output = True
                     self.messages[msg_idx]["content"] += content
                     self._update_streaming_response(content)
                 if thinking:
+                    got_output = True
                     self._update_streaming_thinking(thinking)
         except asyncio.CancelledError:
+            if self.messages[msg_idx].get("content", "") == "":
+                self.messages[msg_idx]["content"] = "Generation cancelled."
+                container = self._get_chat_container()
+                view = container.last_assistant_view()
+                if view:
+                    view.thinking = ""
+                    view.content = "Generation cancelled."
             raise
         except Exception as e:
             self._update_streaming_response(f"\nError: {e}")
         finally:
+            if not got_output and not self.messages[msg_idx].get("content"):
+                fallback = "No response returned by model."
+                self.messages[msg_idx]["content"] = fallback
+                container = self._get_chat_container()
+                view = container.last_assistant_view()
+                if view:
+                    view.thinking = ""
+                    view.content = fallback
             self._streaming_active = False
 
     def _add_message(self, role: str, content: str) -> None:
@@ -170,13 +197,18 @@ class ChatApp(App):
         container = self._get_chat_container()
         view = container.last_assistant_view()
         if view:
+            if view.thinking == "Thinking...":
+                view.thinking = ""
             view.append_content(new_content)
 
     def _update_streaming_thinking(self, new_thinking: str) -> None:
         container = self._get_chat_container()
         view = container.last_assistant_view()
         if view:
-            view.append_thinking(new_thinking)
+            if view.thinking == "Thinking...":
+                view.thinking = new_thinking
+            else:
+                view.append_thinking(new_thinking)
 
     def _show_config(self) -> None:
         self.services["config"].show()
@@ -219,6 +251,29 @@ class ChatApp(App):
 
     def _new_conversation(self) -> None:
         self.services["history"].start_new()
+
+    def _streaming_command(self, args: list[str]) -> str:
+        current = bool(self.config_manager.get("streaming", True))
+
+        if not args or args[0].lower() == "status":
+            return f"Streaming is {'on' if current else 'off'}."
+
+        action = args[0].lower()
+        if action == "on":
+            self.config_manager.set("streaming", True)
+            self.config_manager.save()
+            return "Streaming enabled."
+        if action == "off":
+            self.config_manager.set("streaming", False)
+            self.config_manager.save()
+            return "Streaming disabled."
+        if action == "toggle":
+            next_value = not current
+            self.config_manager.set("streaming", next_value)
+            self.config_manager.save()
+            return f"Streaming {'enabled' if next_value else 'disabled'}."
+
+        return "Usage: /streaming [on|off|toggle|status]"
 
     def _request_quit(self) -> None:
         self.services["history"].save_current()

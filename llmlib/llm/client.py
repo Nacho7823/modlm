@@ -352,7 +352,9 @@ def _parse_choices(choices_data: list[dict[str, Any]]) -> list[Choice]:
             reasoning_content=message_data.get("reasoning_content"),
         )
 
-        tool_calls = choice_data.get("tool_calls", [])
+        tool_calls = choice_data.get("tool_calls")
+        if tool_calls is None:
+            tool_calls = message_data.get("tool_calls", [])
         finish_reason = choice_data.get("finish_reason")
 
         choices.append(

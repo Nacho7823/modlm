@@ -21,6 +21,7 @@ class CommandHandler:
         "mcp": "MCP server management (add, list, remove)",
         "session": "Session management (list, load, delete)",
         "new": "Start new conversation",
+        "streaming": "Streaming mode (on|off|toggle|status)",
         "quit": "Exit application",
         "q": "Exit application (shortcut)",
         "help": "Show available commands",
@@ -36,6 +37,7 @@ class CommandHandler:
         session_load_handler: Callable[[str], str] | None = None,
         session_delete_handler: Callable[[str], str] | None = None,
         new_handler: Callable[[], None] | None = None,
+        streaming_handler: Callable[[list[str]], str] | None = None,
         quit_handler: Callable[[], None] | None = None,
     ) -> None:
         self.config_handler = config_handler
@@ -46,6 +48,7 @@ class CommandHandler:
         self.session_load_handler = session_load_handler
         self.session_delete_handler = session_delete_handler
         self.new_handler = new_handler
+        self.streaming_handler = streaming_handler
         self.quit_handler = quit_handler
 
     def parse(self, text: str) -> Command | None:
@@ -68,6 +71,8 @@ class CommandHandler:
             return self._session(command.args)
         if command.name == "new":
             return self._new()
+        if command.name == "streaming":
+            return self._streaming(command.args)
         if command.name in ("quit", "q"):
             return self._quit()
         return f"Unknown command: /{command.name}"
@@ -155,6 +160,11 @@ class CommandHandler:
         if self.new_handler:
             self.new_handler()
         return "Started new conversation."
+
+    def _streaming(self, args: list[str]) -> str:
+        if self.streaming_handler:
+            return self.streaming_handler(args)
+        return "Streaming control unavailable."
 
     def _quit(self) -> str:
         if self.quit_handler:

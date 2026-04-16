@@ -33,7 +33,7 @@ class ConfigService:
 
         for name, url in self._app.config_manager.get_mcp_servers().items():
             try:
-                client = HTTPMCPClient(base_url=url)
+                client = HTTPMCPClient(name=name, url=url)
                 self._app.mcp_clients[name] = client
             except Exception as e:
                 self._app._add_system_message(
@@ -49,6 +49,7 @@ class ConfigService:
             f"API URL: {api_url}",
             f"API Key: {'(set)' if api_key else '(not set)'}",
             f"Model: {model}",
+            f"Streaming: {'on' if self._app.config_manager.get('streaming', True) else 'off'}",
         ]
         if mcp_servers:
             lines.append("MCP Servers:")

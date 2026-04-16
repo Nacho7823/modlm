@@ -16,6 +16,7 @@ def _get_default_config() -> dict[str, Any]:
         "api_url": os.getenv("LLM_API_URL", "http://127.0.0.1:1234/v1"),
         "api_key": os.getenv("LLM_API_KEY", ""),
         "model": os.getenv("LLM_MODEL", "qwen3.5-4b"),
+        "streaming": os.getenv("LLM_STREAMING", "true").lower() == "true",
         "mcp_servers": {},
     }
 
@@ -42,6 +43,9 @@ class ConfigManager:
         self._config["api_url"] = self._load_env("LLM_API_URL", self._config["api_url"])
         self._config["api_key"] = self._load_env("LLM_API_KEY", "")
         self._config["model"] = self._load_env("LLM_MODEL", self._config["model"])
+        self._config["streaming"] = self._load_env_bool(
+            "LLM_STREAMING", self._config["streaming"]
+        )
 
         if self.config_file.exists():
             with open(self.config_file, "r") as f:
@@ -57,6 +61,8 @@ class ConfigManager:
                     self._config["api_key"] = file_config["api_key"]
                 if "model" in file_config:
                     self._config["model"] = file_config["model"]
+                if "streaming" in file_config:
+                    self._config["streaming"] = bool(file_config["streaming"])
 
         return self._config
 
@@ -64,6 +70,14 @@ class ConfigManager:
         import os
 
         return os.environ.get(key, default)
+
+    def _load_env_bool(self, key: str, default: bool) -> bool:
+        import os
+
+        raw = os.environ.get(key)
+        if raw is None:
+            return default
+        return raw.lower() in ("1", "true", "yes", "on")
 
     def save(self) -> None:
         with open(self.config_file, "w") as f:
