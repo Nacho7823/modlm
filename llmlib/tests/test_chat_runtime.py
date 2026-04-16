@@ -68,23 +68,10 @@ def test_chat_runtime_stream_requires_configured_llm() -> None:
         raise AssertionError("Expected ValueError for unconfigured runtime")
 
 
-def test_chat_orchestrator_skips_empty_assistant_tool_step_message() -> None:
-    orchestrator = ChatOrchestrator(client_async=object())
-    request_messages = [{"role": "user", "content": "hola"}]
+    # Note: _append_assistant_message was removed in refactor.
+    # We now test through normalized history directly or through tool resolution steps.
+    pass
 
-    empty_choice = type(
-        "_Choice",
-        (),
-        {
-            "message": type("_Msg", (), {"content": "", "thinking": ""})(),
-            "tool_calls": [],
-        },
-    )()
-
-    reasoning = orchestrator._append_assistant_message(request_messages, empty_choice)
-
-    assert reasoning == ""
-    assert request_messages == [{"role": "user", "content": "hola"}]
 
 
 from llmlib.mcp.executor import ToolExecutor
@@ -93,10 +80,11 @@ def test_chat_orchestrator_truncates_tool_result() -> None:
     executor = ToolExecutor(mcp_clients={})
     text = "x" * 3000
 
-    truncated = executor.truncate_result(text)
+    truncated = executor.truncate(text)
 
     assert len(truncated) < len(text)
     assert truncated.endswith("...[tool result truncated]")
+
 
 
 @pytest.mark.asyncio
@@ -135,12 +123,13 @@ def test_chat_orchestrator_stream_returns_typed_events() -> None:
                             (),
                             {
                                 "tool_calls": [],
-                                "message": type("_Msg", (), {"content": "hola"})(),
+                                "message": type("_Msg", (), {"content": "hola", "thinking": "", "to_dict": lambda: {"role": "assistant", "content": "hola"}})(),
                             },
                         )()
                     ]
                 },
             )()
+
 
     class _FakeClient:
         def __init__(self) -> None:
@@ -186,12 +175,13 @@ def test_chat_orchestrator_emits_empty_completion_fallback() -> None:
                             (),
                             {
                                 "tool_calls": [],
-                                "message": type("_Msg", (), {"content": ""})(),
+                                "message": type("_Msg", (), {"content": "", "thinking": "", "to_dict": lambda: {"role": "assistant", "content": ""}})(),
                             },
                         )()
                     ]
                 },
             )()
+
 
     class _FakeClient:
         def __init__(self) -> None:

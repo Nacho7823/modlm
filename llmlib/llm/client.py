@@ -148,6 +148,7 @@ class AsyncChat:
         return AsyncCompletions(self._client, self._model)
 
 
+
 class Completions:
     """Chat completions endpoint."""
 
@@ -159,29 +160,13 @@ class Completions:
         self,
         model: str | None = None,
         messages: Sequence[dict[str, Any]] | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
         tools: list[Tool] | None = None,
         **kwargs: Any,
     ) -> ChatCompletion:
-        final_model, payload = _prepare_completion_request(
-            default_model=self._model,
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            tools=tools,
-            **kwargs,
-        )
-
-        response = self._client.post(
-            CHAT_COMPLETIONS_ENDPOINT,
-            json=payload,
-        )
+        payload = _build_payload(model or self._model, messages, tools, **kwargs)
+        response = self._client.post(CHAT_COMPLETIONS_ENDPOINT, json=payload)
         response.raise_for_status()
-        data = response.json()
-
-        return ChatCompletion.from_raw(data)
+        return ChatCompletion.from_raw(response.json())
 
 
 class StreamCompletions:
@@ -195,34 +180,16 @@ class StreamCompletions:
         self,
         model: str | None = None,
         messages: Sequence[dict[str, Any]] | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
         tools: list[Tool] | None = None,
         **kwargs: Any,
     ) -> Iterator[dict[str, Any]]:
-        _, payload = _prepare_completion_request(
-            default_model=self._model,
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            tools=tools,
-            **kwargs,
-        )
-        payload["stream"] = True
-
-        with self._client.stream(
-            "POST",
-            CHAT_COMPLETIONS_ENDPOINT,
-            json=payload,
-        ) as response:
+        payload = _build_payload(model or self._model, messages, tools, stream=True, **kwargs)
+        with self._client.stream("POST", CHAT_COMPLETIONS_ENDPOINT, json=payload) as response:
             response.raise_for_status()
             for line in response.iter_lines():
                 done, chunk = _parse_sse_data_line(line)
-                if done:
-                    break
-                if chunk is not None:
-                    yield chunk
+                if done: break
+                if chunk: yield chunk
 
 
 class AsyncCompletions:
@@ -236,127 +203,52 @@ class AsyncCompletions:
         self,
         model: str | None = None,
         messages: Sequence[dict[str, Any]] | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
         tools: list[Tool] | None = None,
         stream: bool = False,
         **kwargs: Any,
     ) -> ChatCompletion | AsyncIterator[dict[str, Any]]:
-        final_model, payload = _prepare_completion_request(
-            default_model=self._model,
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            tools=tools,
-            **kwargs,
-        )
-
+        payload = _build_payload(model or self._model, messages, tools, stream=stream, **kwargs)
         if stream:
             return self._stream_response(payload)
-        else:
-            return await self._create_sync(payload, final_model)
-
-    async def _create_sync(self, payload: dict[str, Any], model: str) -> ChatCompletion:
-        response = await self._client.post(
-            CHAT_COMPLETIONS_ENDPOINT,
-            json=payload,
-        )
+        
+        response = await self._client.post(CHAT_COMPLETIONS_ENDPOINT, json=payload)
         response.raise_for_status()
-        data = response.json()
-        return ChatCompletion.from_raw(data)
+        return ChatCompletion.from_raw(response.json())
 
-    async def _stream_response(
-        self, payload: dict[str, Any]
-    ) -> AsyncIterator[dict[str, Any]]:
-        payload["stream"] = True
-        try:
-            async with self._client.stream(
-                "POST",
-                CHAT_COMPLETIONS_ENDPOINT,
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    done, chunk = _parse_sse_data_line(line)
-                    if done:
-                        break
-                    if chunk is not None:
-                        yield chunk
-        except asyncio.CancelledError:
-            raise
+    async def _stream_response(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
+        async with self._client.stream("POST", CHAT_COMPLETIONS_ENDPOINT, json=payload) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                done, chunk = _parse_sse_data_line(line)
+                if done: break
+                if chunk: yield chunk
 
 
-def _prepare_completion_request(
-    default_model: str | None,
+def _build_payload(
     model: str | None,
     messages: Sequence[dict[str, Any]] | None,
-    temperature: float | None,
-    max_tokens: int | None,
-    tools: list[Tool] | None,
+    tools: list[Tool] | None = None,
     **kwargs: Any,
-) -> tuple[str, dict[str, Any]]:
-    final_model = model or default_model
-    if not final_model:
-        raise ValueError("model is required")
-
-    payload = _build_payload(
-        model=final_model,
-        messages=_normalize_messages(messages),
-        temperature=temperature,
-        max_tokens=max_tokens,
-        tools=tools,
-        **kwargs,
-    )
-    return final_model, payload
-
-
-def _normalize_messages(
-    messages: Sequence[dict[str, Any]] | None,
-) -> Sequence[dict[str, Any]]:
-    if messages is None:
-        return []
-    return messages
+) -> dict[str, Any]:
+    if not model: raise ValueError("model is required")
+    payload = {"model": model, "messages": list(messages or [])}
+    if tools:
+        payload["tools"] = [t.to_openai_schema() for t in tools]
+    payload.update(kwargs)
+    return payload
 
 
 def _parse_sse_data_line(raw_line: str) -> tuple[bool, dict[str, Any] | None]:
     line = raw_line.strip()
     if not line.startswith(SSE_DATA_PREFIX):
         return False, None
-
     data = line[len(SSE_DATA_PREFIX) :]
     if data == SSE_DONE_MARKER:
         return True, None
-
     try:
         return False, json.loads(data)
     except json.JSONDecodeError:
         return False, None
 
-
-def _build_payload(
-    model: str,
-    messages: Sequence[dict[str, Any]],
-    temperature: float | None,
-    max_tokens: int | None,
-    tools: list[Tool] | None,
-    **kwargs: Any,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": list(messages),
-    }
-
-    if temperature is not None:
-        payload["temperature"] = temperature
-
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
-
-    if tools:
-        payload["tools"] = [tool.to_openai_schema() for tool in tools]
-
-    payload.update(kwargs)
-    return payload
 
 

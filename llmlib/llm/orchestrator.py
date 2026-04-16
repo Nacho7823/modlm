@@ -11,209 +11,92 @@ from llmlib.mcp import ToolExecutor
 logger = logging.getLogger(__name__)
 
 
-class ChatOrchestrator:
-    """Handles LLM streaming with optional MCP tool execution."""
 
-    def __init__(
-        self,
-        client_async: OpenAI,
-        mcp_clients: dict[str, Any] | None = None,
-    ):
+class ChatOrchestrator:
+    """Handles LLM interaction loop with MCP tool execution."""
+
+    def __init__(self, client_async: OpenAI, mcp_clients: dict[str, Any] | None = None):
         self._client = client_async
         self._tool_executor = ToolExecutor(mcp_clients or {})
 
     async def stream(
-        self,
-        messages: list[Message],
-        streaming_enabled: bool = True,
+        self, messages: list[Message], streaming_enabled: bool = True
     ) -> AsyncIterator[StreamEvent]:
         """Yield typed stream events from the LLM runtime."""
-        self._ensure_client()
-
-        request_messages = self._prepare_request_messages(messages)
+        history = [m.to_dict() for m in messages if not m.is_empty_assistant()]
+        
         try:
             tools, tool_targets, errors = await self._tool_executor.discover_tools()
-            for error in errors:
-                yield StreamEvent.content(f"\n[bold yellow]⚠ MCP Warning:[/bold yellow] {error}\n")
+            for err in errors:
+                yield StreamEvent.content(f"\n[bold yellow]⚠ MCP Warning:[/bold yellow] {err}\n")
 
-            tool_loop_content = ""
-            async for event in self._resolve_tool_calls(
-                request_messages,
-                tools,
-                tool_targets,
-            ):
-                if event.kind == "content":
-                    tool_loop_content = event.text
+            # 1. Resolve all tool calls first
+            async for event in self._resolve_tools(history, tools, tool_targets):
                 yield event
 
-            async for chunk in self._emit_final_response(
-                request_messages,
-                tools,
-                streaming_enabled,
-                fallback_content=tool_loop_content,
-            ):
-                yield chunk
+            # 2. Final response (streamed if enabled)
+            async for event in self._emit_final(history, tools, streaming_enabled):
+                yield event
+                
             yield StreamEvent.done()
         finally:
-            # We no longer disconnect clients here because they are persistent!
             pass
 
-    def _ensure_client(self) -> None:
-        if not self._client:
-            raise ValueError("LLM client not initialized")
-
-    def _prepare_request_messages(
-        self,
-        messages: list[Message],
-    ) -> list[dict[str, Any]]:
-        prepared: list[dict[str, Any]] = []
-        for message in messages:
-            if message.is_empty_assistant():
-                continue
-            prepared.append(message.to_dict())
-        return prepared
-
-    async def _resolve_tool_calls(
-        self,
-        request_messages: list[dict[str, Any]],
-        tools: list[Tool],
-        tool_targets: dict[str, tuple[Any, str]],
+    async def _resolve_tools(
+        self, history: list[dict[str, Any]], tools: list[Tool], targets: dict
     ) -> AsyncIterator[StreamEvent]:
-        if not tools:
-            return
+        if not tools: return
 
-        executed_calls: set[str] = set()
         while True:
-            raw_step = await self._client.chat_async.completions.create(
-                messages=request_messages,
-                tools=tools,
-                tool_choice="auto",
+            step = await self._client.chat_async.completions.create(
+                messages=history, tools=tools, tool_choice="auto"
             )
-            step = ChatCompletion.from_raw(raw_step)
-            if not step.choices:
-                return
-
-            choice = step.choices[0]
-            tool_calls = choice.tool_calls
-            content = choice.message.content
-            thinking = self._append_assistant_message(request_messages, choice)
+            if not step.choices: return
             
-            if thinking:
-                yield StreamEvent.thinking(thinking)
-            if content:
-                yield StreamEvent.content(content)
+            choice = step.choices[0]
+            msg, tool_calls = choice.message, choice.tool_calls
+            
+            # Record assistant msg in history
+            history_entry = msg.to_dict()
+            if tool_calls: 
+                history_entry["tool_calls"] = ToolCall.wrap_raw_list(tool_calls)
+            history.append(history_entry)
 
-            if not tool_calls:
-                return
+            if msg.thinking: yield StreamEvent.thinking(msg.thinking)
+            if msg.content: yield StreamEvent.content(msg.content)
+            if not tool_calls: return
 
-            call_keys = self._build_call_keys(tool_calls)
+            # Execute tools and add results to history
+            results = await self._tool_executor.execute_batch(tool_calls, targets)
+            for res in results:
+                yield StreamEvent.content(f"\n[bold green]🛠 Tool [cyan]{res['tool_call_id']}[/cyan]:[/bold green] {res['content']}\n")
+            history.extend(results)
 
-            tool_results = await self._tool_executor.execute_batch(tool_calls, tool_targets)
-            for res in tool_results:
-                tool_msg = f"\n[bold green]🛠 Executed Tool [cyan]{res['tool_call_id']}[/cyan]:[/bold green] {res['content']}\n"
-                yield StreamEvent.content(tool_msg)
-                
-            request_messages.extend(tool_results)
-            executed_calls.update(call_keys)
-
-    def _append_assistant_message(
-        self, request_messages: list[dict[str, Any]], choice: Any
-    ) -> str:
-        msg = choice.message
-        content = msg.content
-        thinking = msg.thinking
-        
-        if not content and not thinking and not choice.tool_calls:
-            return ""
-
-        assistant_message = msg.to_dict()
-
-        if choice.tool_calls:
-            assistant_message["tool_calls"] = ToolCall.wrap_raw_list(choice.tool_calls)
-
-        request_messages.append(assistant_message)
-        return thinking or ""
-
-    def _build_call_keys(self, tool_calls: list[dict[str, Any]]) -> set[str]:
-        return {
-            f"{tool_call.name}:{json.dumps(tool_call.arguments, sort_keys=True)}"
-            for tool_call in (ToolCall.from_dict(data) for data in tool_calls)
-        }
-
-    async def _emit_final_response(
-        self,
-        request_messages: list[dict[str, Any]],
-        tools: list[Tool],
-        streaming_enabled: bool,
-        fallback_content: str = "",
+    async def _emit_final(
+        self, history: list[dict[str, Any]], tools: list[Tool], stream: bool
     ) -> AsyncIterator[StreamEvent]:
-        final_tools = tools or None
-
-        if streaming_enabled:
+        if stream:
             emitted = False
-            async for raw_chunk in await self._client.chat_async.completions.create(
-                messages=request_messages,
-                tools=final_tools,
-                stream=True,
+            async for chunk_raw in await self._client.chat_async.completions.create(
+                messages=history, tools=tools or None, stream=True
             ):
-                chunk = ChatCompletion.from_raw(raw_chunk)
-                if not chunk.choices:
-                    continue
-                    
+                chunk = ChatCompletion.from_raw(chunk_raw)
+                if not chunk.choices: continue
                 msg = chunk.choices[0].message
-                content = msg.content
-                thinking = msg.thinking
-                
-                if content or thinking:
-                    emitted = True
-                if content:
-                    yield StreamEvent.content(content)
-                if thinking:
-                    yield StreamEvent.thinking(thinking)
+                if msg.thinking: yield StreamEvent.thinking(msg.thinking); emitted = True
+                if msg.content: yield StreamEvent.content(msg.content); emitted = True
+            
+            if emitted: return
 
-            if emitted:
-                return
+        # Fallback or non-streaming
+        resp = await self._client.chat_async.completions.create(messages=history, tools=tools or None)
+        if resp.choices:
+            msg = resp.choices[0].message
+            if msg.content: yield StreamEvent.content(msg.content)
+            if msg.thinking: yield StreamEvent.thinking(msg.thinking)
+            if not msg.content and not msg.thinking:
+                yield StreamEvent.content("No response returned by model (empty completion).")
+        elif not any(m["role"] == "assistant" for m in history):
+            yield StreamEvent.content("No response returned by model.")
 
-        content, thinking = await self._final_non_stream_response(
-            request_messages,
-            final_tools,
-        )
-        if not content and not thinking and fallback_content:
-            yield StreamEvent.content(fallback_content)
-            return
-        if not content and not thinking:
-            yield StreamEvent.content(
-                "No response returned by model (empty completion)."
-            )
-            return
-        if content:
-            yield StreamEvent.content(content)
-        if thinking:
-            yield StreamEvent.thinking(thinking)
 
-    async def _final_non_stream_response(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[Tool] | None,
-    ) -> tuple[str, str]:
-        raw_completion = await self._client.chat_async.completions.create(
-            messages=messages,
-            tools=tools,
-        )
-        completion = ChatCompletion.from_raw(raw_completion)
-        if completion.choices:
-            msg = completion.choices[0].message
-            if msg.content or msg.thinking:
-                return msg.content, msg.thinking
-
-        if tools:
-            raw_retry = await self._client.chat_async.completions.create(
-                messages=messages,
-            )
-            retry = ChatCompletion.from_raw(raw_retry)
-            if retry.choices:
-                msg = retry.choices[0].message
-                if msg.content or msg.thinking:
-                    return msg.content, msg.thinking
-
-        return "", ""
